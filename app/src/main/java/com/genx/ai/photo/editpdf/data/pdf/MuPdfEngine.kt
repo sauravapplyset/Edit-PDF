@@ -141,7 +141,7 @@ class MuPdfEngine @Inject constructor(
                 // Match MuPDF lines to PDFBox runs using Spatial Mapping (Nearest Neighbor)
                 // We cannot rely on string matching because PDFBox often extracts garbled text 
                 // for CID/Type0 fonts.
-                var anchor = PdfAnchor(-1)
+                var anchor = PdfAnchor(emptyList())
                 var bestMatch: com.genx.ai.photo.editpdf.domain.model.TextBlock? = null
                 var minDistance = Float.MAX_VALUE
                 
@@ -208,7 +208,7 @@ class MuPdfEngine @Inject constructor(
         anchor: PdfAnchor
     ): Boolean = withContext(Dispatchers.IO) {
         val document = pdBoxDocument ?: throw IllegalStateException("No active document")
-        if (anchor.runIndex == -1) {
+        if (anchor.runIndices.isEmpty() || anchor.runIndex == -1) {
             throw IllegalStateException("Invalid anchor (runIndex = -1). Spatial mapping failed to find a matching block for this text.")
         }
         

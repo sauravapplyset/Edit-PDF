@@ -123,36 +123,48 @@ class ContentStreamTextEditor {
                             }
                         }
                         "Tj", "'", "\"" -> {
-                            if (textShowingCount == anchor.runIndex) {
+                            if (anchor.runIndices.contains(textShowingCount)) {
                                 val operandIndex = operandIndices.lastOrNull()
                                 if (operandIndex != null && tokens[operandIndex] is COSString) {
-                                    val result = applySingleStringEdit(
-                                        page, tokens, operandIndex,
-                                        currentFont, currentFontResourceName, currentFontSizeOperand, newText
-                                    )
-                                    edited = result.edited
-                                    resourcesTouched = result.resourcesTouched
+                                    if (textShowingCount == anchor.runIndices.first()) {
+                                        val result = applyMultiLineEdit(
+                                            page, tokens, i, operandIndex,
+                                            currentFont, currentFontResourceName, currentFontSizeOperand, newText, isArray = false
+                                        )
+                                        edited = result.edited
+                                        resourcesTouched = resourcesTouched || result.resourcesTouched
+                                        i = result.newOperatorIndex
+                                    } else {
+                                        tokens[operandIndex] = COSString("")
+                                    }
                                 } else {
-                                    throw IllegalStateException("Found Tj at index ${anchor.runIndex} but operand is invalid. Operand index: $operandIndex, type: ${tokens.getOrNull(operandIndex ?: -1)?.javaClass?.simpleName}")
+                                    throw IllegalStateException("Found Tj at index $textShowingCount but operand is invalid. Operand index: $operandIndex")
                                 }
-                                break@outer
+                                if (textShowingCount == anchor.runIndices.last()) break@outer
                             }
                             textShowingCount++
                         }
                         "TJ" -> {
-                            if (textShowingCount == anchor.runIndex) {
+                            if (anchor.runIndices.contains(textShowingCount)) {
                                 val operandIndex = operandIndices.lastOrNull()
                                 if (operandIndex != null && tokens[operandIndex] is COSArray) {
-                                    val result = applyArrayEdit(
-                                        page, tokens, i, operandIndex,
-                                        currentFont, currentFontResourceName, currentFontSizeOperand, newText
-                                    )
-                                    edited = result.edited
-                                    resourcesTouched = result.resourcesTouched
+                                    if (textShowingCount == anchor.runIndices.first()) {
+                                        val result = applyMultiLineEdit(
+                                            page, tokens, i, operandIndex,
+                                            currentFont, currentFontResourceName, currentFontSizeOperand, newText, isArray = true
+                                        )
+                                        edited = result.edited
+                                        resourcesTouched = resourcesTouched || result.resourcesTouched
+                                        i = result.newOperatorIndex
+                                    } else {
+                                        val arr = tokens[operandIndex] as COSArray
+                                        arr.clear()
+                                        arr.add(COSString(""))
+                                    }
                                 } else {
-                                    throw IllegalStateException("Found TJ at index ${anchor.runIndex} but operand is invalid. Operand index: $operandIndex, type: ${tokens.getOrNull(operandIndex ?: -1)?.javaClass?.simpleName}")
+                                    throw IllegalStateException("Found TJ at index $textShowingCount but operand is invalid. Operand index: $operandIndex")
                                 }
-                                break@outer
+                                if (textShowingCount == anchor.runIndices.last()) break@outer
                             }
                             textShowingCount++
                         }
@@ -212,6 +224,75 @@ class ContentStreamTextEditor {
     private fun operandAt(tokens: List<Any?>, operandIndices: List<Int>, position: Int): COSBase? {
         val idx = operandIndices.getOrNull(position) ?: return null
         return tokens[idx] as? COSBase
+    }
+
+    private data class MultiEditResult(val edited: Boolean, val resourcesTouched: Boolean, val newOperatorIndex: Int)
+
+    private fun applyMultiLineEdit(
+        page: PDPage,
+        tokens: MutableList<Any?>,
+        operatorIndex: Int,
+        operandIndex: Int,
+        currentFont: PDFont?,
+        currentFontResourceName: COSName?,
+        currentFontSizeOperand: COSBase?,
+        newText: String,
+        isArray: Boolean
+    ): MultiEditResult {
+        val lines = newText.split("\n")
+        var resourcesTouched = false
+        var currentOpIdx = operatorIndex
+
+        for (i in lines.indices) {
+            val lineText = lines[i]
+            val encoded = encodeWithFallback(currentFont, lineText)
+            
+            if (i == 0) {
+                // First line replaces the original operator in place
+                if (isArray) {
+                    val oldArray = tokens[operandIndex] as? com.tom_roush.pdfbox.cos.COSArray
+                    val newArray = com.tom_roush.pdfbox.cos.COSArray()
+                    if (oldArray != null) {
+                        for (k in 0 until oldArray.size()) {
+                            val item = oldArray.get(k)
+                            if (item is com.tom_roush.pdfbox.cos.COSNumber) newArray.add(item) else break
+                        }
+                    }
+                    newArray.add(COSString(encoded.bytes))
+                    tokens[operandIndex] = newArray
+                } else {
+                    tokens[operandIndex] = COSString(encoded.bytes)
+                }
+                if (encoded.substituted) {
+                    spliceSubstituteFont(page, tokens, operandIndex, encoded.font, currentFontResourceName, currentFontSizeOperand)
+                    resourcesTouched = true
+                    currentOpIdx += 3 // spliceSubstituteFont adds 3 tokens before the operand (Tf switch)
+                }
+            } else {
+                // Subsequent lines: insert Td and Tj
+                val fontSize = (currentFontSizeOperand as? com.tom_roush.pdfbox.cos.COSNumber)?.floatValue() ?: 12f
+                val leading = fontSize * 1.2f
+                
+                // Insert: 0 -leading Td
+                tokens.add(currentOpIdx + 1, com.tom_roush.pdfbox.cos.COSFloat(0f))
+                tokens.add(currentOpIdx + 2, com.tom_roush.pdfbox.cos.COSFloat(-leading))
+                tokens.add(currentOpIdx + 3, Operator.getOperator("Td"))
+                
+                // Insert string and Tj
+                tokens.add(currentOpIdx + 4, COSString(encoded.bytes))
+                tokens.add(currentOpIdx + 5, Operator.getOperator("Tj"))
+                
+                if (encoded.substituted) {
+                    spliceSubstituteFont(page, tokens, currentOpIdx + 4, encoded.font, currentFontResourceName, currentFontSizeOperand)
+                    resourcesTouched = true
+                    currentOpIdx += 3 // 3 tokens added
+                }
+                
+                currentOpIdx += 5
+            }
+        }
+        
+        return MultiEditResult(edited = true, resourcesTouched = resourcesTouched, newOperatorIndex = currentOpIdx)
     }
 
     private data class EditResult(val edited: Boolean, val resourcesTouched: Boolean)
@@ -534,7 +615,7 @@ class ContentStreamTextEditor {
                         ),
                         color = argbColor,
                         pageIndex = pageIndex,
-                        anchor = PdfAnchor(runIndex = myOrdinal, xobjectPath = currentPath),
+                        anchor = PdfAnchor(runIndices = listOf(myOrdinal), xobjectPath = currentPath),
                         matrix = pdfMatrix,
                         baselineX = baseline.first,
                         baselineY = baseline.second,

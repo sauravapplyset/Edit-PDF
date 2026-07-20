@@ -16,16 +16,26 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -51,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -92,9 +103,54 @@ fun PdfViewerScreen(
     var offset by remember { mutableStateOf(Offset.Zero) }
     // TODO: Clamp offset so page cannot be panned completely out of the visible area
 
+    var textValue by remember { mutableStateOf("") }
+    var isEditing by remember { mutableStateOf(false) }
+
+    androidx.compose.runtime.LaunchedEffect(state.selectedTextBlock) {
+        if (state.selectedTextBlock != null) {
+            textValue = state.selectedTextBlock.text
+            isEditing = false
+        } else {
+            isEditing = false
+        }
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
+            if (state.selectedTextBlock != null && isEditing) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = "Editing Text",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onDismissEdit) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Cancel",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { onConfirmEdit(textValue) }) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Save",
+                                tint = NeonCyan
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background
+                    )
+                )
+            } else {
+                TopAppBar(
                 title = {
                     Text(
                         text = "Edit PDF",
@@ -148,6 +204,7 @@ fun PdfViewerScreen(
                     containerColor = MaterialTheme.colorScheme.background
                 )
             )
+            }
         },
         bottomBar = {
             state.pdfDocument?.let { doc ->
@@ -242,6 +299,25 @@ fun PdfViewerScreen(
                             val pageOriginX = (containerWidthPx - displayWidthDp * dpToPx) / 2f
                             val pageOriginY = (containerHeightPx - displayHeightDp * dpToPx) / 2f
 
+                            val imeBottomPx = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(density)
+                            
+                            androidx.compose.runtime.LaunchedEffect(isEditing, imeBottomPx) {
+                                if (isEditing && imeBottomPx > 0 && state.selectedTextBlock != null) {
+                                    val block = state.selectedTextBlock!!
+                                    val bb = block.boundingBox
+                                    val pageLocalBottomY = (bb.top + bb.height) * scalePtToDp * dpToPx
+                                    val unscaledY = pageOriginY + pageLocalBottomY
+                                    val cy = containerHeightPx / 2f
+                                    val screenY = cy + (unscaledY - cy) * scale + offset.y
+                                    val visibleBottom = containerHeightPx - imeBottomPx - 200f // 200px padding for keyboard toolbar
+                                    
+                                    if (screenY > visibleBottom) {
+                                        val panAmount = screenY - visibleBottom
+                                        offset = offset.copy(y = offset.y - panAmount)
+                                    }
+                                }
+                            }
+
                             // -----------------------------------------------------------------------
                             // UNIFIED POINTER INPUT — handles BOTH pinch-zoom/pan AND taps.
                             //
@@ -274,12 +350,16 @@ fun PdfViewerScreen(
                                             var accumulatedZoom = 1f
                                             var accumulatedPan = Offset.Zero
                                             var pastSlop = false
+                                            var wasConsumed = false
                                             val touchSlop = viewConfiguration.touchSlop
 
                                             do {
                                                 val event = awaitPointerEvent(pass = PointerEventPass.Main)
                                                 // If a child consumed the event, defer to it
-                                                if (event.changes.any { it.isConsumed }) break
+                                                if (event.changes.any { it.isConsumed }) {
+                                                    wasConsumed = true
+                                                    break
+                                                }
 
                                                 val zoomChange = event.calculateZoom()
                                                 val panChange = event.calculatePan()
@@ -324,7 +404,7 @@ fun PdfViewerScreen(
                                             // -------------------------------------------------------
                                             // TAP PATH — finger lifted without crossing slop
                                             // -------------------------------------------------------
-                                            if (!pastSlop) {
+                                            if (!pastSlop && !wasConsumed) {
                                                 val tapPos = down.position
 
                                                 // Invert the graphicsLayer transform to get the
@@ -406,33 +486,77 @@ fun PdfViewerScreen(
                                         modifier = Modifier.fillMaxSize()
                                     )
 
-                                    // Draw subtle text-block outlines for visual feedback.
-                                    // Click handling is NOT done here — it is done via the
-                                    // coordinate-inversion hit test in the outer pointerInput.
-                                    // Using drawWithContent avoids nested clickable boxes
-                                    // which could interfere with gesture propagation.
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .drawWithContent {
-                                                drawContent()
-                                                state.textBlocks.forEach { block ->
-                                                    val bb = block.boundingBox
-                                                    val leftPx = bb.left * scalePtToDp * dpToPx
-                                                    val topPx = bb.top * scalePtToDp * dpToPx
-                                                    val widthPx = bb.width * scalePtToDp * dpToPx
-                                                    val heightPx = bb.height * scalePtToDp * dpToPx
-                                                    // Subtle outline — visible enough to confirm
-                                                    // what's tappable, not distracting during reading
-                                                    drawRect(
-                                                        color = SelectionBorderColor.copy(alpha = 0.20f),
-                                                        topLeft = Offset(leftPx, topPx),
-                                                        size = Size(widthPx, heightPx),
-                                                        style = Stroke(width = 1.5f)
-                                                    )
+                                    // INLINE EDIT OVERLAY / SELECTION
+                                    state.selectedTextBlock?.let { block ->
+                                        val bb = block.boundingBox
+                                        val leftDp = (bb.left * scalePtToDp).dp
+                                        val topDp = (bb.top * scalePtToDp).dp
+                                        val widthDp = (bb.width * scalePtToDp).dp
+                                        val heightDp = (bb.height * scalePtToDp).dp
+                                        val fontSizeSp = (block.fontInfo.fontSize * scalePtToDp)
+
+                                        if (!isEditing) {
+                                            // Red Selection Bounding Box with Corner Dots
+                                            Box(
+                                                modifier = Modifier
+                                                    .offset(x = leftDp, y = topDp)
+                                                    .size(width = widthDp, height = heightDp)
+                                                    .border(1.5.dp, Color.Red)
+                                            ) {
+                                                val dotSize = 6.dp
+                                                // Top Left
+                                                Box(modifier = Modifier.align(Alignment.TopStart).offset(x = (-3).dp, y = (-3).dp).size(dotSize).clip(androidx.compose.foundation.shape.CircleShape).border(1.dp, Color.Red, androidx.compose.foundation.shape.CircleShape).background(Color.White))
+                                                // Top Right
+                                                Box(modifier = Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp).size(dotSize).clip(androidx.compose.foundation.shape.CircleShape).border(1.dp, Color.Red, androidx.compose.foundation.shape.CircleShape).background(Color.White))
+                                                // Bottom Left
+                                                Box(modifier = Modifier.align(Alignment.BottomStart).offset(x = (-3).dp, y = 3.dp).size(dotSize).clip(androidx.compose.foundation.shape.CircleShape).border(1.dp, Color.Red, androidx.compose.foundation.shape.CircleShape).background(Color.White))
+                                                // Bottom Right
+                                                Box(modifier = Modifier.align(Alignment.BottomEnd).offset(x = 3.dp, y = 3.dp).size(dotSize).clip(androidx.compose.foundation.shape.CircleShape).border(1.dp, Color.Red, androidx.compose.foundation.shape.CircleShape).background(Color.White))
+                                            }
+
+                                            // Floating Menu (Edit, Copy, Delete)
+                                            Box(
+                                                modifier = Modifier
+                                                    .offset(x = leftDp, y = topDp - 50.dp)
+                                                    .background(Color.White, RoundedCornerShape(8.dp))
+                                                    .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    IconButton(onClick = { isEditing = true }, modifier = Modifier.size(36.dp)) {
+                                                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = Color.Black, modifier = Modifier.size(20.dp))
+                                                    }
+                                                    IconButton(onClick = { /* TODO: Copy */ }, modifier = Modifier.size(36.dp)) {
+                                                        Text("Copy", fontSize = 12.sp, color = Color.Black)
+                                                    }
+                                                    IconButton(onClick = { /* TODO: Delete */ }, modifier = Modifier.size(36.dp)) {
+                                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Black, modifier = Modifier.size(20.dp))
+                                                    }
                                                 }
                                             }
-                                    )
+                                        } else {
+                                            // INLINE EDITOR (Solid White background to hide original text while editing)
+                                            val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+                                            androidx.compose.runtime.LaunchedEffect(Unit) {
+                                                focusRequester.requestFocus()
+                                            }
+
+                                            androidx.compose.foundation.text.BasicTextField(
+                                                value = textValue,
+                                                onValueChange = { textValue = it },
+                                                modifier = Modifier
+                                                    .offset(x = leftDp, y = topDp)
+                                                    .widthIn(min = widthDp, max = (displayWidthDp.dp - leftDp))
+                                                    .focusRequester(focusRequester)
+                                                    .background(Color.White)
+                                                    .border(1.dp, Color.LightGray),
+                                                textStyle = androidx.compose.ui.text.TextStyle(
+                                                    fontSize = fontSizeSp.sp,
+                                                    color = Color.Black
+                                                )
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -440,74 +564,6 @@ fun PdfViewerScreen(
                 } ?: Text(
                     text = "No page loaded.",
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                )
-            }
-
-            // -----------------------------------------------------------------------
-            // TEXT EDITING DIALOG
-            // TODO: Add font size slider so user can increase/decrease font size
-            // TODO: Add a color picker row to change text color inline
-            // TODO: Preview edited text in the original PDF font (not system default)
-            // -----------------------------------------------------------------------
-            state.selectedTextBlock?.let { block ->
-                var textValue by remember(block) { mutableStateOf(block.text) }
-
-                AlertDialog(
-                    onDismissRequest = onDismissEdit,
-                    title = {
-                        Text(
-                            text = "Edit Text Run",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    },
-                    text = {
-                        Column {
-                            Text(
-                                text = "Font: ${block.fontInfo.fontName} (Size: ${block.fontInfo.fontSize}pt)",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                            OutlinedTextField(
-                                value = textValue,
-                                onValueChange = { textValue = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = NeonCyan,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(
-                                        alpha = 0.2f
-                                    ),
-                                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface
-                                )
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = { onConfirmEdit(textValue) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = NeonCyan,
-                                contentColor = MaterialTheme.colorScheme.background
-                            ),
-                            shape = RoundedCornerShape(20.dp)
-                        ) {
-                            Text(text = "Apply", fontWeight = FontWeight.Bold)
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = onDismissEdit) {
-                            Text(
-                                text = "Cancel",
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
-                        }
-                    },
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(24.dp)
                 )
             }
 

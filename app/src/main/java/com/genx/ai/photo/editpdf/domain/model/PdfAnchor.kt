@@ -10,6 +10,9 @@ package com.genx.ai.photo.editpdf.domain.model
 // anchor always points at the same PDF text object, no matter how many times it has already
 // been edited.
 data class PdfAnchor(
-    val runIndex: Int,
+    val runIndices: List<Int>,
     val xobjectPath: List<String> = emptyList()
-)
+) {
+    // For backward compatibility or single-run blocks
+    val runIndex: Int get() = runIndices.firstOrNull() ?: -1
+}
