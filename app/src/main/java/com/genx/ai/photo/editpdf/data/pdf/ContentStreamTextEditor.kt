@@ -246,11 +246,30 @@ class ContentStreamTextEditor {
         newText: String
     ): EditResult {
         val encoded = encodeWithFallback(currentFont, newText)
-        // TJ's array operand (text runs interleaved with glyph-kerning numbers) collapses to a
-        // single Tj string — intra-run kerning on this one run is lost, same documented
-        // limitation the old ContentStreamTokenEditor had for TJ runs.
-        tokens[operandIndex] = COSString(encoded.bytes)
-        tokens[operatorIndex] = Operator.getOperator("Tj")
+        
+        val oldArray = tokens[operandIndex] as? com.tom_roush.pdfbox.cos.COSArray
+        val newArray = com.tom_roush.pdfbox.cos.COSArray()
+        
+        // Preserve any numbers (kerning) that appear before the first string in the array.
+        // PDF generators often use initial kerning to center or right-align text on a line.
+        // Losing this offset shifts the text horizontally.
+        if (oldArray != null) {
+            for (i in 0 until oldArray.size()) {
+                val item = oldArray.get(i)
+                if (item is com.tom_roush.pdfbox.cos.COSNumber) {
+                    newArray.add(item)
+                } else {
+                    break // Stop at the first string
+                }
+            }
+        }
+        
+        newArray.add(COSString(encoded.bytes))
+        
+        tokens[operandIndex] = newArray
+        // We keep the operator as TJ, do not change to Tj
+        // tokens[operatorIndex] remains Operator.getOperator("TJ")
+        
         var resourcesTouched = false
         if (encoded.substituted) {
             spliceSubstituteFont(page, tokens, operandIndex, encoded.font, currentFontResourceName, currentFontSizeOperand)
