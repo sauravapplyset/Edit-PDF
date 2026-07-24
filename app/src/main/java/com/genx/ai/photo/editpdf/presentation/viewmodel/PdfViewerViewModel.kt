@@ -106,6 +106,53 @@ class PdfViewerViewModel @Inject constructor(
         _uiState.update { it.copy(selectedTextBlock = textBlock) }
     }
 
+    fun expandSelection(newRect: com.genx.ai.photo.editpdf.domain.model.PdfRect) {
+        val currentBlocks = _uiState.value.textBlocks
+        val intersectingBlocks = currentBlocks.filter { it.boundingBox.intersects(newRect) }
+            .sortedWith(compareBy({ it.baselineY }, { it.boundingBox.left }))
+
+        if (intersectingBlocks.isEmpty()) return
+
+        val mergedText = java.lang.StringBuilder()
+        val mergedIndices = mutableListOf<Int>()
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE
+        var maxY = Float.MIN_VALUE
+
+        for (j in intersectingBlocks.indices) {
+            val block = intersectingBlocks[j]
+            // If they are somewhat on the same line, use a space, otherwise newline
+            if (j > 0) {
+                val prev = intersectingBlocks[j - 1]
+                if (java.lang.Math.abs(block.baselineY - prev.baselineY) > block.fontInfo.fontSize * 0.8f) {
+                    mergedText.append("\n")
+                } else {
+                    mergedText.append(" ")
+                }
+            }
+            mergedText.append(block.text)
+            mergedIndices.addAll(block.anchor.runIndices)
+
+            minX = minOf(minX, block.boundingBox.left)
+            minY = minOf(minY, block.boundingBox.top)
+            maxX = maxOf(maxX, block.boundingBox.right)
+            maxY = maxOf(maxY, block.boundingBox.bottom)
+        }
+
+        mergedIndices.sort()
+        val firstBlock = intersectingBlocks.first()
+
+        val newBlock = firstBlock.copy(
+            id = "merged_v_${System.currentTimeMillis()}",
+            text = mergedText.toString().replace(" \n", "\n").replace("\n ", "\n"),
+            boundingBox = com.genx.ai.photo.editpdf.domain.model.PdfRect(minX, minY, maxX, maxY),
+            anchor = com.genx.ai.photo.editpdf.domain.model.PdfAnchor(mergedIndices, firstBlock.anchor.xobjectPath)
+        )
+
+        _uiState.update { it.copy(selectedTextBlock = newBlock) }
+    }
+
     // TODO: Validate newText is not empty before applying; show inline error if empty
     // TODO: Support multi-line text editing (newlines in the edit dialog)
     fun confirmEdit(newText: String) {

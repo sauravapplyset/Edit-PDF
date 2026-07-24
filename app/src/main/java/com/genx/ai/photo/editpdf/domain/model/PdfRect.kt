@@ -10,4 +10,9 @@ data class PdfRect(
 ) {
     val width: Float get() = right - left
     val height: Float get() = bottom - top
+
+    fun intersects(other: PdfRect): Boolean {
+        return left <= other.right && right >= other.left &&
+               top <= other.bottom && bottom >= other.top
+    }
 }

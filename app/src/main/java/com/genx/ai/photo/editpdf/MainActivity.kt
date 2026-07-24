@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
                                 state = state,
                                 onPageChanged = { viewModel.loadPage(it) },
                                 onTextBlockClick = { viewModel.selectTextBlock(it) },
+                                onExpandSelection = { viewModel.expandSelection(it) },
                                 onConfirmEdit = { viewModel.confirmEdit(it) },
                                 onDismissEdit = { viewModel.selectTextBlock(null) },
                                 onUndoClick = { viewModel.undo() },
