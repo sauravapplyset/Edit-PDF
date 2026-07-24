@@ -100,7 +100,7 @@ class PdfRepositoryImpl @Inject constructor(
                 val yDiff = java.lang.Math.abs(block.baselineY - lastBlock.baselineY)
                 val xGap = block.boundingBox.left - lastBlock.boundingBox.right
 
-                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 5f) {
+                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 1.2f) {
                     currentLine.add(block)
                 } else {
                     lines.add(currentLine)
