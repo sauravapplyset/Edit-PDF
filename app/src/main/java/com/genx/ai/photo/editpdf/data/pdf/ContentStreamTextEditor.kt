@@ -408,6 +408,16 @@ class ContentStreamTextEditor {
                 currentOpIdx += 5
             }
         }
+        if (lines.size > 1) {
+            val fontSize = (currentFontSizeOperand as? com.tom_roush.pdfbox.cos.COSNumber)?.floatValue() ?: 12f
+            val leading = fontSize * 1.2f
+            val totalShift = (lines.size - 1) * leading
+            
+            tokens.add(currentOpIdx + 1, com.tom_roush.pdfbox.cos.COSFloat(0f))
+            tokens.add(currentOpIdx + 2, com.tom_roush.pdfbox.cos.COSFloat(totalShift))
+            tokens.add(currentOpIdx + 3, Operator.getOperator("Td"))
+            currentOpIdx += 3
+        }
         
         return MultiEditResult(edited = true, resourcesTouched = resourcesTouched, newOperatorIndex = currentOpIdx)
     }
