@@ -115,13 +115,17 @@ fun PdfViewerScreen(
     var offset by remember { mutableStateOf(Offset.Zero) }
     // TODO: Clamp offset so page cannot be panned completely out of the visible area
 
-    var textValue by remember { mutableStateOf("") }
+    var textValue by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue("")) }
     var isEditing by remember { mutableStateOf(false) }
     var isEditMode by remember { mutableStateOf(false) }
 
     androidx.compose.runtime.LaunchedEffect(state.selectedTextBlock) {
         if (state.selectedTextBlock != null) {
-            textValue = state.selectedTextBlock.text
+            val text = state.selectedTextBlock.text
+            textValue = androidx.compose.ui.text.input.TextFieldValue(
+                text = text,
+                selection = androidx.compose.ui.text.TextRange(text.length)
+            )
             isEditing = false
         } else {
             isEditing = false
@@ -151,7 +155,7 @@ fun PdfViewerScreen(
                     },
                     actions = {
                         IconButton(onClick = {
-                            onConfirmEdit(textValue)
+                            onConfirmEdit(textValue.text)
                         }) {
                             Icon(
                                 imageVector = Icons.Default.Check,
@@ -657,7 +661,6 @@ fun PdfViewerScreen(
                                                 }
                                             }
                                         } else {
-                                            // INLINE EDITOR (Solid White background to hide original text while editing)
                                             val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
                                             androidx.compose.runtime.LaunchedEffect(Unit) {
                                                 focusRequester.requestFocus()
@@ -667,30 +670,37 @@ fun PdfViewerScreen(
 
                                             Box(
                                                 modifier = Modifier
-                                                    .offset(x = leftDp, y = topDp - 2.dp)
-                                                    .defaultMinSize(minWidth = widthDp, minHeight = heightDp + 4.dp)
-                                                    .background(Color.White)
-                                                    .border(1.dp, NeonCyan, RoundedCornerShape(2.dp))
-                                                    .padding(horizontal = 2.dp),
+                                                    .offset(x = leftDp - 4.dp, y = topDp - 2.dp)
+                                                    .defaultMinSize(minWidth = widthDp + 8.dp, minHeight = heightDp + 4.dp)
+                                                    .background(Color.White, RoundedCornerShape(4.dp))
+                                                    .border(1.dp, Color(0xFF1A73E8).copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 4.dp),
                                                 contentAlignment = Alignment.CenterStart
                                             ) {
                                                 androidx.compose.foundation.text.BasicTextField(
                                                     value = textValue,
-                                                    onValueChange = { textValue = it.replace(Regex("[\\r\\n]"), "") },
+                                                    onValueChange = { newValue ->
+                                                        if (newValue.text.contains("\n") || newValue.text.contains("\r")) {
+                                                            textValue = newValue.copy(text = newValue.text.replace(Regex("[\\r\\n]"), ""))
+                                                        } else {
+                                                            textValue = newValue
+                                                        }
+                                                    },
                                                     singleLine = true,
                                                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                                         imeAction = androidx.compose.ui.text.input.ImeAction.Done
                                                     ),
                                                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                                                        onDone = { onConfirmEdit(textValue) }
+                                                        onDone = { onConfirmEdit(textValue.text) }
                                                     ),
                                                     modifier = Modifier
                                                         .widthIn(min = widthDp)
                                                         .focusRequester(focusRequester),
                                                     textStyle = androidx.compose.ui.text.TextStyle(
                                                         fontSize = fontSizeSpVal,
-                                                        color = Color.Black
-                                                    )
+                                                        color = Color(0xFF1F1F1F) // slightly softer black for premium feel
+                                                    ),
+                                                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Color(0xFF1A73E8))
                                                 )
                                             }
                                         }
