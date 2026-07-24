@@ -146,7 +146,7 @@ class PdfViewerViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, selectedTextBlock = null, errorMessage = null) }
             
-            applyTextEditUseCase(selectedBlock.id, newText, pageIndex)
+            applyTextEditUseCase(selectedBlock, newText, pageIndex)
                 .onSuccess {
                     // Reload current page to reflect changes
                     loadPage(pageIndex)

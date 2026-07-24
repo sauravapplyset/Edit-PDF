@@ -232,28 +232,49 @@ class PdfRepositoryImpl @Inject constructor(
     // visual line (see mergeTextBlocks) written at its own original anchor, so an edit here can
     // only ever rewrite that line's own text-showing operator(s) — every other line and every
     // other block keeps its original position untouched.
-    override suspend fun applyTextEdit(blockId: String, newText: String, pageIndex: Int): Result<Unit> {
+    override suspend fun applyTextEdit(block: TextBlock, newText: String, pageIndex: Int): Result<Unit> {
         return try {
-            val block = textBlockCache[blockId] ?: return Result.failure(
-                IllegalArgumentException("TextBlock with ID $blockId not found in cache")
-            )
-
-            // Always write at the block's original anchor — never a position re-derived from
-            // the document's current (possibly already-edited) state. No whiteout/overlay: the
-            // engine mutates the original text-showing operator's own operand directly, which is
-            // what makes the old glyphs stop being drawn.
             val success = pdfEngine.replaceText(pageIndex, newText, block.anchor)
             if (success) {
                 val editOp = EditOperation.TextEdit(
-                    blockId = blockId,
+                    blockId = block.id,
                     originalText = block.text,
                     newText = newText,
                     pageIndex = pageIndex
                 )
                 undoStack.addLast(editOp)
-                redoStack.clear() // Clear redo stack on new edit
+                redoStack.clear()
 
-                textBlockCache[blockId] = block.copy(text = newText)
+                if (textBlockCache.containsKey(block.id)) {
+                    textBlockCache[block.id] = block.copy(text = newText)
+                } else {
+                    val mergedRunIndices = block.anchor.runIndices.toSet()
+                    
+                    val blocksToRemove = textBlockCache.values.filter { 
+                        it.anchor.xobjectPath == block.anchor.xobjectPath &&
+                        mergedRunIndices.containsAll(it.anchor.runIndices) 
+                    }
+                    val idsToRemove = blocksToRemove.map { it.id }.toSet()
+                    idsToRemove.forEach { textBlockCache.remove(it) }
+                    
+                    textBlockCache[block.id] = block.copy(text = newText)
+                    
+                    pageBlockOrder[pageIndex]?.let { order ->
+                        val newOrder = mutableListOf<String>()
+                        var inserted = false
+                        for (id in order) {
+                            if (idsToRemove.contains(id)) {
+                                if (!inserted) {
+                                    newOrder.add(block.id)
+                                    inserted = true
+                                }
+                            } else {
+                                newOrder.add(id)
+                            }
+                        }
+                        pageBlockOrder[pageIndex] = newOrder
+                    }
+                }
 
                 Result.success(Unit)
             } else {
