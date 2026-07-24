@@ -695,9 +695,9 @@ class ContentStreamTextEditor {
                 val textState = gs.textState
                 val font = textState.font ?: return
                 val text = if (bytes != null) decodeText(font, bytes) else decodeArrayText(font, array!!)
-                if (text.trim().isEmpty()) {
-                    return // Do not record invisible space blocks; their index was already counted.
-                }
+                // Do not return early if text is blank. PDFBox often fails to decode CID/Type0 fonts,
+                // producing blank text. We must still record the run so MuPdfEngine can spatially map
+                // its anchor index for replacement.
 
                 val ctm = gs.currentTransformationMatrix
                 val tm = textMatrix ?: Matrix()

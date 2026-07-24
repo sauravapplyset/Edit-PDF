@@ -88,39 +88,19 @@ class PdfRepositoryImpl @Inject constructor(
         val finalBlocks = mutableListOf<TextBlock>()
 
         for ((_, pathBlocks) in groupedByPath) {
-            val sortedBlocks = pathBlocks.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
-
-            val deduplicatedBlocks = mutableListOf<TextBlock>()
-            for (block in sortedBlocks) {
-                val shadowOf = deduplicatedBlocks.find { 
-                    it.text == block.text && 
-                    java.lang.Math.abs(it.boundingBox.left - block.boundingBox.left) < it.fontInfo.fontSize &&
-                    java.lang.Math.abs(it.boundingBox.top - block.boundingBox.top) < it.fontInfo.fontSize * 0.5f
-                }
-                if (shadowOf != null) {
-                    val mergedIndices = (shadowOf.anchor.runIndices + block.anchor.runIndices).sorted()
-                    val index = deduplicatedBlocks.indexOf(shadowOf)
-                    deduplicatedBlocks[index] = shadowOf.copy(
-                        anchor = shadowOf.anchor.copy(runIndices = mergedIndices)
-                    )
-                } else {
-                    deduplicatedBlocks.add(block)
-                }
-            }
+            val sortedBlocks = pathBlocks.sortedWith(compareBy({ it.baselineY }, { it.baselineX }))
 
             val lines = mutableListOf<MutableList<TextBlock>>()
-            if (deduplicatedBlocks.isEmpty()) continue
-            var currentLine = mutableListOf(deduplicatedBlocks.first())
+            var currentLine = mutableListOf(sortedBlocks.first())
 
-            for (i in 1 until deduplicatedBlocks.size) {
-                val block = deduplicatedBlocks[i]
+            for (i in 1 until sortedBlocks.size) {
+                val block = sortedBlocks[i]
                 val lastBlock = currentLine.last()
 
-                val yDiff = java.lang.Math.abs(block.boundingBox.top - lastBlock.boundingBox.top)
+                val yDiff = java.lang.Math.abs(block.baselineY - lastBlock.baselineY)
                 val xGap = block.boundingBox.left - lastBlock.boundingBox.right
 
-                // Allow larger xGap to support justified text and table of contents dots, but prevent merging separate columns
-                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 8.0f && xGap > -lastBlock.fontInfo.fontSize * 3.0f) {
+                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 1.2f) {
                     currentLine.add(block)
                 } else {
                     lines.add(currentLine)
@@ -131,7 +111,7 @@ class PdfRepositoryImpl @Inject constructor(
             
             val lineBlocks = mutableListOf<TextBlock>()
             lines.forEach { line ->
-                line.sortBy { it.boundingBox.left }
+                line.sortBy { it.baselineX }
                 lineBlocks.add(mergeLineBlocks(line))
             }
 
@@ -143,10 +123,8 @@ class PdfRepositoryImpl @Inject constructor(
                     val lastInGroup = group.last()
                     val verticalGap = lineBlock.boundingBox.top - lastInGroup.boundingBox.bottom
                     
-                    // Also ensure they have similar font sizes to prevent merging headings with paragraphs
-                    val fontSizeRatio = lineBlock.fontInfo.fontSize / lastInGroup.fontInfo.fontSize
-                    val hasSimilarFontSize = fontSizeRatio > 0.85f && fontSizeRatio < 1.15f
-                    if (hasSimilarFontSize && verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
+                    // Check if vertically close (allow overlap up to 1 fontSize, or gap up to 1.5 fontSize)
+                    if (verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
                         val overlapX = maxOf(0f, minOf(lineBlock.boundingBox.right, lastInGroup.boundingBox.right) - maxOf(lineBlock.boundingBox.left, lastInGroup.boundingBox.left))
                         val minWidth = minOf(lineBlock.boundingBox.width, lastInGroup.boundingBox.width)
                         val leftDiff = java.lang.Math.abs(lineBlock.boundingBox.left - lastInGroup.boundingBox.left)
@@ -225,7 +203,7 @@ class PdfRepositoryImpl @Inject constructor(
             // Add space if there is a horizontal gap between blocks on the same line
             if (j > 0) {
                 val prevBlock = line[j - 1]
-                val gap = block.boundingBox.left - (prevBlock.boundingBox.left + (prevBlock.fontInfo.fontSize * prevBlock.text.length * 0.5f)) // rough estimate of width
+                val gap = block.baselineX - (prevBlock.baselineX + (prevBlock.fontInfo.fontSize * prevBlock.text.length * 0.5f)) // rough estimate of width
                 if (gap > prevBlock.fontInfo.fontSize * 0.2f && !mergedText.endsWith(" ")) {
                     mergedText.append(" ")
                 }
@@ -254,29 +232,28 @@ class PdfRepositoryImpl @Inject constructor(
     // visual line (see mergeTextBlocks) written at its own original anchor, so an edit here can
     // only ever rewrite that line's own text-showing operator(s) — every other line and every
     // other block keeps its original position untouched.
-    override suspend fun applyTextEdit(anchor: com.genx.ai.photo.editpdf.domain.model.PdfAnchor, newText: String, pageIndex: Int): Result<Unit> {
+    override suspend fun applyTextEdit(blockId: String, newText: String, pageIndex: Int): Result<Unit> {
         return try {
+            val block = textBlockCache[blockId] ?: return Result.failure(
+                IllegalArgumentException("TextBlock with ID $blockId not found in cache")
+            )
+
             // Always write at the block's original anchor — never a position re-derived from
             // the document's current (possibly already-edited) state. No whiteout/overlay: the
             // engine mutates the original text-showing operator's own operand directly, which is
             // what makes the old glyphs stop being drawn.
-            val success = pdfEngine.replaceText(pageIndex, newText, anchor)
+            val success = pdfEngine.replaceText(pageIndex, newText, block.anchor)
             if (success) {
-                // Find all blocks in the cache that match this anchor and update them
-                val affectedBlocks = textBlockCache.values.filter { it.anchor == anchor }
-                
                 val editOp = EditOperation.TextEdit(
-                    blockId = affectedBlocks.firstOrNull()?.id ?: "unknown",
-                    originalText = affectedBlocks.firstOrNull()?.text ?: "",
+                    blockId = blockId,
+                    originalText = block.text,
                     newText = newText,
                     pageIndex = pageIndex
                 )
                 undoStack.addLast(editOp)
                 redoStack.clear() // Clear redo stack on new edit
 
-                affectedBlocks.forEach { block ->
-                    textBlockCache[block.id] = block.copy(text = newText)
-                }
+                textBlockCache[blockId] = block.copy(text = newText)
 
                 Result.success(Unit)
             } else {

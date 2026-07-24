@@ -76,7 +76,6 @@ class MainActivity : ComponentActivity() {
                                 state = state,
                                 onPageChanged = { viewModel.loadPage(it) },
                                 onTextBlockClick = { viewModel.selectTextBlock(it) },
-                                onExpandSelection = { viewModel.expandSelection(it) },
                                 onConfirmEdit = { viewModel.confirmEdit(it) },
                                 onDismissEdit = { viewModel.selectTextBlock(null) },
                                 onUndoClick = { viewModel.undo() },
@@ -86,7 +85,8 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onBackClick = {
                                     navController.popBackStack()
-                                }
+                                },
+                                onSelectionResized = { viewModel.resizeSelection(it) }
                             )
                         }
                     }

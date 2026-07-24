@@ -101,56 +101,40 @@ class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    // TODO: Keep a selection history so user can jump back to previously edited blocks
     fun selectTextBlock(textBlock: TextBlock?) {
         _uiState.update { it.copy(selectedTextBlock = textBlock) }
     }
 
-    fun expandSelection(newRect: com.genx.ai.photo.editpdf.domain.model.PdfRect) {
+    fun resizeSelection(rect: com.genx.ai.photo.editpdf.domain.model.PdfRect) {
         val currentBlocks = _uiState.value.textBlocks
-        val intersectingBlocks = currentBlocks.filter { it.boundingBox.intersects(newRect) }
-            .sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
+        if (currentBlocks.isEmpty()) return
+        
+        val intersectingBlocks = currentBlocks.filter { block ->
+            val bb = block.boundingBox
+            rect.left <= bb.right && rect.right >= bb.left &&
+            rect.top <= bb.bottom && rect.bottom >= bb.top
+        }.sortedBy { it.boundingBox.top }
 
         if (intersectingBlocks.isEmpty()) return
 
-        val mergedText = java.lang.StringBuilder()
-        val mergedIndices = mutableListOf<Int>()
-        var minX = Float.MAX_VALUE
-        var minY = Float.MAX_VALUE
-        var maxX = Float.MIN_VALUE
-        var maxY = Float.MIN_VALUE
+        val mergedText = intersectingBlocks.joinToString("\n") { it.text }
+        val mergedRunIndices = intersectingBlocks.flatMap { it.anchor.runIndices }.sorted()
+        
+        val minX = intersectingBlocks.minOf { it.boundingBox.left }
+        val maxX = intersectingBlocks.maxOf { it.boundingBox.right }
+        val minY = intersectingBlocks.minOf { it.boundingBox.top }
+        val maxY = intersectingBlocks.maxOf { it.boundingBox.bottom }
+        val mergedRect = com.genx.ai.photo.editpdf.domain.model.PdfRect(minX, minY, maxX, maxY)
 
-        for (j in intersectingBlocks.indices) {
-            val block = intersectingBlocks[j]
-            // If they are somewhat on the same line, use a space, otherwise newline
-            if (j > 0) {
-                val prev = intersectingBlocks[j - 1]
-                if (java.lang.Math.abs(block.boundingBox.top - prev.boundingBox.top) > block.fontInfo.fontSize * 0.8f) {
-                    mergedText.append("\n")
-                } else {
-                    mergedText.append(" ")
-                }
-            }
-            mergedText.append(block.text)
-            mergedIndices.addAll(block.anchor.runIndices)
-
-            minX = minOf(minX, block.boundingBox.left)
-            minY = minOf(minY, block.boundingBox.top)
-            maxX = maxOf(maxX, block.boundingBox.right)
-            maxY = maxOf(maxY, block.boundingBox.bottom)
-        }
-
-        mergedIndices.sort()
         val firstBlock = intersectingBlocks.first()
-
-        val newBlock = firstBlock.copy(
-            id = "merged_v_${System.currentTimeMillis()}",
-            text = mergedText.toString().replace(" \n", "\n").replace("\n ", "\n"),
-            boundingBox = com.genx.ai.photo.editpdf.domain.model.PdfRect(minX, minY, maxX, maxY),
-            anchor = com.genx.ai.photo.editpdf.domain.model.PdfAnchor(mergedIndices, firstBlock.anchor.xobjectPath)
+        val mergedBlock = firstBlock.copy(
+            id = intersectingBlocks.joinToString("_") { it.id },
+            text = mergedText,
+            boundingBox = mergedRect,
+            anchor = firstBlock.anchor.copy(runIndices = mergedRunIndices)
         )
 
-        _uiState.update { it.copy(selectedTextBlock = newBlock) }
+        _uiState.update { it.copy(selectedTextBlock = mergedBlock) }
     }
 
     // TODO: Validate newText is not empty before applying; show inline error if empty
@@ -162,7 +146,7 @@ class PdfViewerViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, selectedTextBlock = null, errorMessage = null) }
             
-            applyTextEditUseCase(selectedBlock.anchor, newText, pageIndex)
+            applyTextEditUseCase(selectedBlock.id, newText, pageIndex)
                 .onSuccess {
                     // Reload current page to reflect changes
                     loadPage(pageIndex)

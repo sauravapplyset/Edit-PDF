@@ -103,13 +103,13 @@ fun PdfViewerScreen(
     state: PdfViewerState,
     onPageChanged: (Int) -> Unit,
     onTextBlockClick: (TextBlock) -> Unit,
-    onExpandSelection: (com.genx.ai.photo.editpdf.domain.model.PdfRect) -> Unit,
     onConfirmEdit: (String) -> Unit,
     onDismissEdit: () -> Unit,
     onUndoClick: () -> Unit,
     onRedoClick: () -> Unit,
     onExportClick: () -> Unit,
     onBackClick: () -> Unit,
+    onSelectionResized: (com.genx.ai.photo.editpdf.domain.model.PdfRect) -> Unit,
     modifier: Modifier = Modifier
 ) {
     // Zoom scale (1f = fit-to-screen, max 5x) and pan offset in px.
@@ -610,175 +610,67 @@ fun PdfViewerScreen(
                                         val fontSizeSp = (block.fontInfo.fontSize * scalePtToDp)
 
                                         if (!isEditing) {
-                                            // Local state for dragging the bounding box
-                                            var dragLeft by remember(block.id) { androidx.compose.runtime.mutableStateOf(leftDp.value) }
-                                            var dragTop by remember(block.id) { androidx.compose.runtime.mutableStateOf(topDp.value) }
-                                            var dragRight by remember(block.id) { androidx.compose.runtime.mutableStateOf((leftDp + widthDp).value) }
-                                            var dragBottom by remember(block.id) { androidx.compose.runtime.mutableStateOf((topDp + heightDp).value) }
-                                            var isDragging by remember(block.id) { androidx.compose.runtime.mutableStateOf(false) }
+                                            var dragRect by remember(block.boundingBox) { mutableStateOf(block.boundingBox) }
+                                            val leftDp = (dragRect.left * scalePtToDp).dp
+                                            val topDp = (dragRect.top * scalePtToDp).dp
+                                            val widthDp = (dragRect.width * scalePtToDp).coerceAtLeast(0f).dp
+                                            val heightDp = (dragRect.height * scalePtToDp).coerceAtLeast(0f).dp
+                                            val premiumBlue = Color(0xFF1A73E8)
+                                            val dotSize = 12.dp
 
-                                            val currentLeftDp = if (isDragging) dragLeft.dp else leftDp
-                                            val currentTopDp = if (isDragging) dragTop.dp else topDp
-                                            val currentWidthDp = if (isDragging) (dragRight - dragLeft).dp else widthDp
-                                            val currentHeightDp = if (isDragging) (dragBottom - dragTop).dp else heightDp
-
-                                            val handleSize = 14.dp
-                                            val handleOffset = handleSize / 2
-                                            
-                                            val densityVal = density.density
-
-                                            // Premium Blue Selection Bounding Box with Elegant Handles
+                                            // Premium Selection Bounding Box with Corner Dots
                                             Box(
                                                 modifier = Modifier
-                                                    .offset(x = currentLeftDp, y = currentTopDp)
-                                                    .size(width = currentWidthDp, height = currentHeightDp)
-                                                    .border(1.dp, Color(0xFF1A73E8).copy(alpha = 0.8f))
+                                                    .offset(x = leftDp, y = topDp)
+                                                    .size(width = widthDp, height = heightDp)
+                                                    .border(1.dp, premiumBlue)
                                             ) {
-                                                // Top Left Handle
-                                                Box(modifier = Modifier
-                                                    .align(Alignment.TopStart)
-                                                    .offset(x = -handleOffset, y = -handleOffset)
-                                                    .size(handleSize)
-                                                    .clip(androidx.compose.foundation.shape.CircleShape)
-                                                    .background(Color(0xFF1A73E8))
-                                                    .border(1.5.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
-                                                    .pointerInput(block.id) {
-                                                        detectDragGestures(
-                                                            onDragStart = { 
-                                                                isDragging = true
-                                                                dragLeft = leftDp.value
-                                                                dragTop = topDp.value
-                                                                dragRight = (leftDp + widthDp).value
-                                                                dragBottom = (topDp + heightDp).value
-                                                            },
-                                                            onDragEnd = {
-                                                                isDragging = false
-                                                                val newRect = com.genx.ai.photo.editpdf.domain.model.PdfRect(
-                                                                    dragLeft / scalePtToDp,
-                                                                    dragTop / scalePtToDp,
-                                                                    dragRight / scalePtToDp,
-                                                                    dragBottom / scalePtToDp
-                                                                )
-                                                                onExpandSelection(newRect)
-                                                            }
-                                                        ) { change, dragAmount ->
+                                                // Top Left
+                                                Box(modifier = Modifier.align(Alignment.TopStart).offset(x = (-6).dp, y = (-6).dp).size(dotSize)
+                                                    .pointerInput(Unit) {
+                                                        detectDragGestures(onDragEnd = { onSelectionResized(dragRect) }) { change, dragAmount ->
                                                             change.consume()
-                                                            dragLeft = (dragLeft + dragAmount.x / densityVal).coerceAtMost(dragRight - 10f)
-                                                            dragTop = (dragTop + dragAmount.y / densityVal).coerceAtMost(dragBottom - 10f)
+                                                            val dx = dragAmount.x / density.density / scalePtToDp
+                                                            val dy = dragAmount.y / density.density / scalePtToDp
+                                                            dragRect = dragRect.copy(left = dragRect.left + dx, top = dragRect.top + dy)
                                                         }
-                                                    }
-                                                )
-                                                
-                                                // Top Right Handle
-                                                Box(modifier = Modifier
-                                                    .align(Alignment.TopEnd)
-                                                    .offset(x = handleOffset, y = -handleOffset)
-                                                    .size(handleSize)
-                                                    .clip(androidx.compose.foundation.shape.CircleShape)
-                                                    .background(Color(0xFF1A73E8))
-                                                    .border(1.5.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
-                                                    .pointerInput(block.id) {
-                                                        detectDragGestures(
-                                                            onDragStart = { 
-                                                                isDragging = true
-                                                                dragLeft = leftDp.value
-                                                                dragTop = topDp.value
-                                                                dragRight = (leftDp + widthDp).value
-                                                                dragBottom = (topDp + heightDp).value
-                                                            },
-                                                            onDragEnd = {
-                                                                isDragging = false
-                                                                val newRect = com.genx.ai.photo.editpdf.domain.model.PdfRect(
-                                                                    dragLeft / scalePtToDp,
-                                                                    dragTop / scalePtToDp,
-                                                                    dragRight / scalePtToDp,
-                                                                    dragBottom / scalePtToDp
-                                                                )
-                                                                onExpandSelection(newRect)
-                                                            }
-                                                        ) { change, dragAmount ->
+                                                    }.clip(androidx.compose.foundation.shape.CircleShape).border(1.5.dp, premiumBlue, androidx.compose.foundation.shape.CircleShape).background(Color.White))
+                                                // Top Right
+                                                Box(modifier = Modifier.align(Alignment.TopEnd).offset(x = 6.dp, y = (-6).dp).size(dotSize)
+                                                    .pointerInput(Unit) {
+                                                        detectDragGestures(onDragEnd = { onSelectionResized(dragRect) }) { change, dragAmount ->
                                                             change.consume()
-                                                            dragRight = (dragRight + dragAmount.x / densityVal).coerceAtLeast(dragLeft + 10f)
-                                                            dragTop = (dragTop + dragAmount.y / densityVal).coerceAtMost(dragBottom - 10f)
+                                                            val dx = dragAmount.x / density.density / scalePtToDp
+                                                            val dy = dragAmount.y / density.density / scalePtToDp
+                                                            dragRect = dragRect.copy(right = dragRect.right + dx, top = dragRect.top + dy)
                                                         }
-                                                    }
-                                                )
-                                                
-                                                // Bottom Left Handle
-                                                Box(modifier = Modifier
-                                                    .align(Alignment.BottomStart)
-                                                    .offset(x = -handleOffset, y = handleOffset)
-                                                    .size(handleSize)
-                                                    .clip(androidx.compose.foundation.shape.CircleShape)
-                                                    .background(Color(0xFF1A73E8))
-                                                    .border(1.5.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
-                                                    .pointerInput(block.id) {
-                                                        detectDragGestures(
-                                                            onDragStart = { 
-                                                                isDragging = true
-                                                                dragLeft = leftDp.value
-                                                                dragTop = topDp.value
-                                                                dragRight = (leftDp + widthDp).value
-                                                                dragBottom = (topDp + heightDp).value
-                                                            },
-                                                            onDragEnd = {
-                                                                isDragging = false
-                                                                val newRect = com.genx.ai.photo.editpdf.domain.model.PdfRect(
-                                                                    dragLeft / scalePtToDp,
-                                                                    dragTop / scalePtToDp,
-                                                                    dragRight / scalePtToDp,
-                                                                    dragBottom / scalePtToDp
-                                                                )
-                                                                onExpandSelection(newRect)
-                                                            }
-                                                        ) { change, dragAmount ->
+                                                    }.clip(androidx.compose.foundation.shape.CircleShape).border(1.5.dp, premiumBlue, androidx.compose.foundation.shape.CircleShape).background(Color.White))
+                                                // Bottom Left
+                                                Box(modifier = Modifier.align(Alignment.BottomStart).offset(x = (-6).dp, y = 6.dp).size(dotSize)
+                                                    .pointerInput(Unit) {
+                                                        detectDragGestures(onDragEnd = { onSelectionResized(dragRect) }) { change, dragAmount ->
                                                             change.consume()
-                                                            dragLeft = (dragLeft + dragAmount.x / densityVal).coerceAtMost(dragRight - 10f)
-                                                            dragBottom = (dragBottom + dragAmount.y / densityVal).coerceAtLeast(dragTop + 10f)
+                                                            val dx = dragAmount.x / density.density / scalePtToDp
+                                                            val dy = dragAmount.y / density.density / scalePtToDp
+                                                            dragRect = dragRect.copy(left = dragRect.left + dx, bottom = dragRect.bottom + dy)
                                                         }
-                                                    }
-                                                )
-                                                
-                                                // Bottom Right Handle
-                                                Box(modifier = Modifier
-                                                    .align(Alignment.BottomEnd)
-                                                    .offset(x = handleOffset, y = handleOffset)
-                                                    .size(handleSize)
-                                                    .clip(androidx.compose.foundation.shape.CircleShape)
-                                                    .background(Color(0xFF1A73E8))
-                                                    .border(1.5.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
-                                                    .pointerInput(block.id) {
-                                                        detectDragGestures(
-                                                            onDragStart = { 
-                                                                isDragging = true
-                                                                dragLeft = leftDp.value
-                                                                dragTop = topDp.value
-                                                                dragRight = (leftDp + widthDp).value
-                                                                dragBottom = (topDp + heightDp).value
-                                                            },
-                                                            onDragEnd = {
-                                                                isDragging = false
-                                                                val newRect = com.genx.ai.photo.editpdf.domain.model.PdfRect(
-                                                                    dragLeft / scalePtToDp,
-                                                                    dragTop / scalePtToDp,
-                                                                    dragRight / scalePtToDp,
-                                                                    dragBottom / scalePtToDp
-                                                                )
-                                                                onExpandSelection(newRect)
-                                                            }
-                                                        ) { change, dragAmount ->
+                                                    }.clip(androidx.compose.foundation.shape.CircleShape).border(1.5.dp, premiumBlue, androidx.compose.foundation.shape.CircleShape).background(Color.White))
+                                                // Bottom Right
+                                                Box(modifier = Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 6.dp).size(dotSize)
+                                                    .pointerInput(Unit) {
+                                                        detectDragGestures(onDragEnd = { onSelectionResized(dragRect) }) { change, dragAmount ->
                                                             change.consume()
-                                                            dragRight = (dragRight + dragAmount.x / densityVal).coerceAtLeast(dragLeft + 10f)
-                                                            dragBottom = (dragBottom + dragAmount.y / densityVal).coerceAtLeast(dragTop + 10f)
+                                                            val dx = dragAmount.x / density.density / scalePtToDp
+                                                            val dy = dragAmount.y / density.density / scalePtToDp
+                                                            dragRect = dragRect.copy(right = dragRect.right + dx, bottom = dragRect.bottom + dy)
                                                         }
-                                                    }
-                                                )
+                                                    }.clip(androidx.compose.foundation.shape.CircleShape).border(1.5.dp, premiumBlue, androidx.compose.foundation.shape.CircleShape).background(Color.White))
                                             }
 
                                             // Floating Menu (Edit, Copy, Delete)
                                             Box(
                                                 modifier = Modifier
-                                                    .offset(x = currentLeftDp, y = currentTopDp - 70.dp) // Moved slightly higher for larger menu
+                                                    .offset(x = leftDp, y = topDp - 70.dp) // Moved slightly higher for larger menu
                                                     .background(Color.White, RoundedCornerShape(12.dp))
                                                     .border(1.dp, Color.LightGray.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                                                     .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -836,12 +728,6 @@ fun PdfViewerScreen(
                                                         textValue = newValue
                                                     },
                                                     singleLine = false,
-                                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                                        imeAction = androidx.compose.ui.text.input.ImeAction.Done
-                                                    ),
-                                                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                                                        onDone = { onConfirmEdit(textValue.text) }
-                                                    ),
                                                     modifier = Modifier
                                                         .widthIn(min = widthDp)
                                                         .focusRequester(focusRequester),
