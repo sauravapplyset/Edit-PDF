@@ -716,11 +716,12 @@ fun PdfViewerScreen(
                                             Box(
                                                 modifier = Modifier
                                                     .offset(x = leftDp - 4.dp, y = topDp - 2.dp)
-                                                    .defaultMinSize(minWidth = widthDp + 8.dp, minHeight = heightDp + 4.dp)
+                                                    .width(widthDp + 8.dp)
+                                                    .defaultMinSize(minHeight = heightDp + 4.dp)
                                                     .background(Color.White, RoundedCornerShape(4.dp))
                                                     .border(1.dp, Color(0xFF1A73E8).copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                                                    .padding(horizontal = 4.dp),
-                                                contentAlignment = Alignment.CenterStart
+                                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                                contentAlignment = Alignment.TopStart
                                             ) {
                                                 androidx.compose.foundation.text.BasicTextField(
                                                     value = textValue,
@@ -729,7 +730,7 @@ fun PdfViewerScreen(
                                                     },
                                                     singleLine = false,
                                                     modifier = Modifier
-                                                        .widthIn(min = widthDp)
+                                                        .fillMaxWidth()
                                                         .focusRequester(focusRequester),
                                                     textStyle = androidx.compose.ui.text.TextStyle(
                                                         fontSize = fontSizeSpVal,
