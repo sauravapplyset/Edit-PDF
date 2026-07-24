@@ -139,37 +139,51 @@ class MuPdfEngine @Inject constructor(
                 )
                 
                 // Match MuPDF lines to PDFBox runs using Spatial Mapping (Nearest Neighbor)
-                // We cannot rely on string matching because PDFBox often extracts garbled text 
+                // We cannot rely on string matching because PDFBox often extracts garbled text
                 // for CID/Type0 fonts.
                 var anchor = PdfAnchor(emptyList())
                 var bestMatch: com.genx.ai.photo.editpdf.domain.model.TextBlock? = null
                 var minDistance = Float.MAX_VALUE
-                
+                var bestRawDistSq = Float.MAX_VALUE
+
                 val cx = (rect.left + rect.right) / 2
                 val cy = (rect.top + rect.bottom) / 2
-                
+
                 // Start search across the ENTIRE page. MuPDF outputs in reading order,
                 // but PDFBox outputs in raw content stream order, which can be completely random.
                 for (pdBlock in pdBoxBlocks) {
                     val pcx = (pdBlock.boundingBox.left + pdBlock.boundingBox.right) / 2
                     val pcy = (pdBlock.boundingBox.top + pdBlock.boundingBox.bottom) / 2
-                    
+
                     val dx = cx - pcx
                     val dy = cy - pcy
                     // Weight Y-distance heavily so it prefers blocks on the exact same line
                     val distSq = (dx * dx) + (dy * dy * 10)
-                    
+
                     if (distSq < minDistance) {
                         minDistance = distSq
                         bestMatch = pdBlock
+                        bestRawDistSq = (dx * dx) + (dy * dy)
                     }
                 }
-                
-                // We will always find a match as long as pdBoxBlocks is not empty
+
+                // A nearest match is only trustworthy if it's actually near. Without this cap,
+                // a PDFBox run that failed to extract near this text (e.g. an operator error
+                // earlier in the stream, or a font PDFBox couldn't resolve at all) would fall
+                // back to "closest surviving run anywhere on the page" — silently pointing the
+                // anchor at a COMPLETELY UNRELATED run. Editing would then either corrupt that
+                // unrelated text or (best case) do nothing visible to the tapped text. Leaving
+                // the anchor empty instead makes replaceText's existing "invalid anchor" guard
+                // fail loudly and safely — "no valid replace target" rather than silent corruption.
+                val maxAllowedDist = rect.width + rect.height * 4f + 72f // generous: line size + ~1 inch
                 var pdBoxBlock: com.genx.ai.photo.editpdf.domain.model.TextBlock? = null
-                if (bestMatch != null) {
+                if (bestMatch != null && bestRawDistSq <= maxAllowedDist * maxAllowedDist) {
                     anchor = bestMatch.anchor
                     pdBoxBlock = bestMatch
+                } else if (bestMatch != null) {
+                    Log.w(TAG, "No PDFBox run found near MuPDF text \"$text\" on page $pageIndex " +
+                        "(nearest was ${kotlin.math.sqrt(bestRawDistSq)}pt away) — leaving this block unmapped " +
+                        "rather than guessing wrong")
                 }
                 
                 muPdfBlocks.add(
@@ -205,14 +219,16 @@ class MuPdfEngine @Inject constructor(
     override suspend fun replaceText(
         pageIndex: Int,
         newText: String,
-        anchor: PdfAnchor
+        anchor: PdfAnchor,
+        shiftY: Float,
+        shiftAnchors: List<PdfAnchor>
     ): Boolean = withContext(Dispatchers.IO) {
         val document = pdBoxDocument ?: throw IllegalStateException("No active document")
         if (anchor.runIndices.isEmpty() || anchor.runIndex == -1) {
             throw IllegalStateException("Invalid anchor (runIndex = -1). Spatial mapping failed to find a matching block for this text.")
         }
-        
-        val replaced = textEditor.replaceTextRun(document, pageIndex, anchor, newText)
+
+        val replaced = textEditor.replaceTextRun(document, pageIndex, anchor, newText, shiftY, shiftAnchors)
         
         if (replaced) {
             // Re-sync MuPDF document by saving PDFBox to byte array and re-opening

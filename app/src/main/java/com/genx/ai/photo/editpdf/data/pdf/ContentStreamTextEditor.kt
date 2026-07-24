@@ -72,7 +72,23 @@ class ContentStreamTextEditor {
         }
     }
 
-    fun replaceTextRun(document: PDDocument, pageIndex: Int, anchor: PdfAnchor, newText: String): Boolean {
+    // True in-place replacement, no overlay: the target Tj/TJ operator's own string operand is
+    // mutated directly (see the Tj/TJ branches below). No whiteout rectangle, no extra graphics
+    // or text is ever inserted to mask the original glyphs — mutating the operator's operand is
+    // itself what makes the old glyphs stop being drawn, so nothing needs to be painted over
+    // them. (A previous version inserted a filled white rectangle ahead of the run's text object
+    // to mask the original glyphs before drawing the new ones. Besides being an overlay — the
+    // opposite of in-place editing — its visual-space-to-PDF-space transform, which also had to
+    // undo page rotation, was a real source of misplacement: the rectangle could land somewhere
+    // other than where the old glyphs actually were, leaving them visible next to the new text.)
+    fun replaceTextRun(
+        document: PDDocument,
+        pageIndex: Int,
+        anchor: PdfAnchor,
+        newText: String,
+        shiftY: Float = 0f,
+        shiftAnchors: List<PdfAnchor> = emptyList()
+    ): Boolean {
         val page = document.getPage(pageIndex)
         
         var currentResources = page.resources ?: PDResources()
@@ -140,7 +156,13 @@ class ContentStreamTextEditor {
                                 } else {
                                     throw IllegalStateException("Found Tj at index $textShowingCount but operand is invalid. Operand index: $operandIndex")
                                 }
-                                if (textShowingCount == anchor.runIndices.last()) break@outer
+                                if (textShowingCount == anchor.runIndices.last() && shiftAnchors.isEmpty()) break@outer
+                            } else if (shiftAnchors.any { it.runIndices.first() == textShowingCount }) {
+                                val operandIndex = operandIndices.firstOrNull() ?: i
+                                tokens.add(operandIndex, COSFloat(0f))
+                                tokens.add(operandIndex + 1, COSFloat(shiftY))
+                                tokens.add(operandIndex + 2, Operator.getOperator("Td"))
+                                i += 3
                             }
                             textShowingCount++
                         }
@@ -164,7 +186,13 @@ class ContentStreamTextEditor {
                                 } else {
                                     throw IllegalStateException("Found TJ at index $textShowingCount but operand is invalid. Operand index: $operandIndex")
                                 }
-                                if (textShowingCount == anchor.runIndices.last()) break@outer
+                                if (textShowingCount == anchor.runIndices.last() && shiftAnchors.isEmpty()) break@outer
+                            } else if (shiftAnchors.any { it.runIndices.first() == textShowingCount }) {
+                                val operandIndex = operandIndices.firstOrNull() ?: i
+                                tokens.add(operandIndex, COSFloat(0f))
+                                tokens.add(operandIndex + 1, COSFloat(shiftY))
+                                tokens.add(operandIndex + 2, Operator.getOperator("Td"))
+                                i += 3
                             }
                             textShowingCount++
                         }
@@ -363,18 +391,35 @@ class ContentStreamTextEditor {
 
     // Encodes newText with the run's ORIGINAL font whenever possible — the whole point of this
     // engine is that an edited run keeps its exact original font. Only when the embedded font's
-    // glyph set genuinely cannot represent a character in the new text (font.encode throws
-    // IllegalArgumentException — PDFBox's own signal for "unsupported by this font") do we fall
-    // back to a close standard-14 font, per the confirmed product policy (same behavior Adobe
-    // Acrobat itself falls back to). Position, size, and color are untouched either way.
+    // glyph set genuinely cannot represent a character in the new text do we fall back to a
+    // close standard-14 font, per the confirmed product policy (same behavior Adobe Acrobat
+    // itself falls back to). Position, size, and color are untouched either way.
+    //
+    // Two failure modes both funnel into the same fallback path, and BOTH must be flagged
+    // `substituted = true` so the caller splices in a matching Tf switch:
+    //
+    //  1. `originalFont` is null — the run's font resource itself failed to resolve (seen for
+    //     some embedded Type0/CID fonts pdfbox-android cannot fully parse). There is no real
+    //     font to reuse here. Silently encoding with a stand-in WITHOUT switching Tf — the old
+    //     bug — leaves stand-in single-byte codes being interpreted by whatever font the Tf
+    //     operator still points at (often a 2-byte CID font), rendering as garbage or nothing.
+    //  2. `font.encode(text)` throws. PDFBox signals "no glyph for this character" via
+    //     IllegalArgumentException, but embedded/subset/CID fonts can also throw IOException (or
+    //     other RuntimeExceptions) while lazily parsing a malformed glyph/cmap table. Catching
+    //     only IllegalArgumentException let those propagate up and abort the whole edit — which
+    //     is exactly "text extraction works but replacement fails" for certain embedded fonts.
     private fun encodeWithFallback(originalFont: PDFont?, text: String): EncodedRun {
-        val font = originalFont ?: PDType1Font.HELVETICA
+        if (originalFont == null) {
+            val substitute = pickSubstituteFont(null)
+            Log.w(TAG, "Run's font resource could not be resolved; substituting '${substitute.name}' for this run only")
+            return EncodedRun(substitute.encode(text), substitute, substituted = true)
+        }
         return try {
-            EncodedRun(font.encode(text), font, substituted = false)
-        } catch (e: IllegalArgumentException) {
+            EncodedRun(originalFont.encode(text), originalFont, substituted = false)
+        } catch (e: Exception) {
             val substitute = pickSubstituteFont(originalFont)
-            Log.w(TAG, "Font '${runCatching { originalFont?.name }.getOrNull()}' has no glyph for the " +
-                "edited text; substituting '${substitute.name}' for this run only")
+            Log.w(TAG, "Font '${runCatching { originalFont.name }.getOrNull()}' could not encode the " +
+                "edited text (${e.javaClass.simpleName}: ${e.message}); substituting '${substitute.name}' for this run only")
             EncodedRun(substitute.encode(text), substitute, substituted = true)
         }
     }
@@ -489,43 +534,73 @@ class ContentStreamTextEditor {
             addOperator(com.tom_roush.pdfbox.contentstream.operator.text.ShowTextLineAndSpace())
         }
 
+        // Every operator is isolated: a single unsupported/malformed operator ANYWHERE on the
+        // page (a broken shading pattern, an exotic color space, a corrupt inline image...) must
+        // never abort the scan. Before this fix, an uncaught exception from ANY operator here
+        // propagated out of processPage() and was only caught by extractTextRuns()'s top-level
+        // try/catch — which returns whatever runs were collected UP TO that point and silently
+        // drops every run after it. Any text positioned later in the content stream (e.g. a
+        // caption or heading drawn after a problematic graphics operator) then has no PDFBox run
+        // to match against, so MuPdfEngine's nearest-neighbor spatial matching latches onto the
+        // closest surviving (but wrong) run instead — which is why editing/replacing such text
+        // silently failed or corrupted unrelated text, even though extraction seemed to work.
+        private var currentOrdinal: Int = 0
+
         override fun processOperator(operator: com.tom_roush.pdfbox.contentstream.operator.Operator, operands: MutableList<com.tom_roush.pdfbox.cos.COSBase>?) {
-            if (operator.name == "Do" && operands?.isNotEmpty() == true) {
-                val name = (operands[0] as? com.tom_roush.pdfbox.cos.COSName)?.name
-                if (name != null) {
-                    xobjectStack.add(name)
-                    val xobjName = com.tom_roush.pdfbox.cos.COSName.getPDFName(name)
-                    val xobj = resources?.getXObject(xobjName)
-                    if (xobj is com.tom_roush.pdfbox.pdmodel.graphics.form.PDFormXObject) {
-                        try {
-                            showForm(xobj)
-                        } catch (e: Exception) {
-                            android.util.Log.e("PdfBox", "Failed to show form: ${e.message}", e)
-                        }
-                    } else {
-                        android.util.Log.e("PdfBox", "XObject $name not found or not a form. resources=$resources")
-                    }
-                    xobjectStack.removeLast()
-                    return // We handled it, don't call super
-                }
+            if (operator.name == "Tj" || operator.name == "TJ" || operator.name == "'" || operator.name == "\"") {
+                val currentPath = xobjectStack.toList()
+                val count = runCounters.getOrDefault(currentPath, 0)
+                currentOrdinal = count
+                runCounters[currentPath] = count + 1
             }
-            super.processOperator(operator, operands)
+            try {
+                if (operator.name == "Do" && operands?.isNotEmpty() == true) {
+                    val name = (operands[0] as? com.tom_roush.pdfbox.cos.COSName)?.name
+                    if (name != null) {
+                        xobjectStack.add(name)
+                        val xobjName = com.tom_roush.pdfbox.cos.COSName.getPDFName(name)
+                        val xobj = resources?.getXObject(xobjName)
+                        if (xobj is com.tom_roush.pdfbox.pdmodel.graphics.form.PDFormXObject) {
+                            try {
+                                showForm(xobj)
+                            } catch (e: Exception) {
+                                android.util.Log.e("PdfBox", "Failed to show form: ${e.message}", e)
+                            }
+                        } else {
+                            android.util.Log.e("PdfBox", "XObject $name not found or not a form. resources=$resources")
+                        }
+                        xobjectStack.removeLast()
+                        return // We handled it, don't call super
+                    }
+                }
+                super.processOperator(operator, operands)
+            } catch (e: Exception) {
+                Log.e(TAG, "Skipping operator '${operator.name}' on page $pageIndex after failure: ${e.message}", e)
+            }
         }
 
+        private var inShowTextStrings = false
+
         override fun showTextString(string: ByteArray) {
-            recordRun(string, null)
+            if (!inShowTextStrings) {
+                recordRun(string, null)
+            }
             super.showTextString(string)
         }
 
         override fun showTextStrings(array: COSArray) {
             recordRun(null, array)
-            super.showTextStrings(array)
+            inShowTextStrings = true
+            try {
+                super.showTextStrings(array)
+            } finally {
+                inShowTextStrings = false
+            }
         }
 
         private fun recordRun(bytes: ByteArray?, array: com.tom_roush.pdfbox.cos.COSArray?) {
             val currentPath = xobjectStack.toList()
-            val myOrdinal = runCounters.getOrDefault(currentPath, 0)
-            runCounters[currentPath] = myOrdinal + 1
+            val myOrdinal = currentOrdinal
             try {
                 val gs = graphicsState
                 val textState = gs.textState

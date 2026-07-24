@@ -17,7 +17,7 @@ interface PdfEngine {
     suspend fun extractTextBlocks(pageIndex: Int): List<TextBlock>
     // anchor identifies the exact content-stream text element to mutate in place — no search,
     // no overlay; the element's own font/color/position/transparency are left untouched.
-    suspend fun replaceText(pageIndex: Int, newText: String, anchor: PdfAnchor): Boolean
+    suspend fun replaceText(pageIndex: Int, newText: String, anchor: PdfAnchor, shiftY: Float = 0f, shiftAnchors: List<PdfAnchor> = emptyList()): Boolean
     suspend fun save(outputUriString: String)
     fun close()
 }

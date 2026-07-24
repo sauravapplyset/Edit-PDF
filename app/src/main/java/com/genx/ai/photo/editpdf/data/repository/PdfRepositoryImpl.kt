@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import com.genx.ai.photo.editpdf.data.pdf.PdfEngine
 import com.genx.ai.photo.editpdf.domain.model.EditOperation
 import com.genx.ai.photo.editpdf.domain.model.PdfDocument
+import com.genx.ai.photo.editpdf.domain.model.PdfAnchor
 import com.genx.ai.photo.editpdf.domain.model.TextBlock
 import com.genx.ai.photo.editpdf.domain.repository.PdfRepository
 import javax.inject.Inject
@@ -73,73 +74,56 @@ class PdfRepositoryImpl @Inject constructor(
         }
     }
 
+    // Each visual LINE becomes its own independently editable block — never merged with any
+    // other line. Editing one line must only ever touch that line's own text-showing
+    // operator(s); every other line, and every other block on the page, must stay byte-for-byte
+    // untouched. (A previous version merged an entire xobjectPath's worth of lines into one
+    // page-spanning "paragraph" block. Editing that block caused ContentStreamTextEditor to blank
+    // out every original run except the first and reflow the whole page from the first run's
+    // font/position — the root cause of full-page corruption on a single-word edit.)
     private fun mergeTextBlocks(blocks: List<TextBlock>): List<TextBlock> {
         if (blocks.isEmpty()) return emptyList()
 
-        // 1. Sort blocks top-to-bottom, then left-to-right
-        val sortedBlocks = blocks.sortedWith(compareBy({ it.baselineY }, { it.baselineX }))
+        val groupedByPath = blocks.groupBy { it.anchor.xobjectPath }
+        val finalBlocks = mutableListOf<TextBlock>()
 
-        val lines = mutableListOf<MutableList<TextBlock>>()
-        var currentLine = mutableListOf(sortedBlocks.first())
+        for ((_, pathBlocks) in groupedByPath) {
+            val sortedBlocks = pathBlocks.sortedWith(compareBy({ it.baselineY }, { it.baselineX }))
 
-        // 2. Group into lines based on Y coordinate proximity
-        for (i in 1 until sortedBlocks.size) {
-            val block = sortedBlocks[i]
-            val lastBlock = currentLine.last()
-            
-            // If the vertical difference is less than half the font size, consider it the same line
-            val yDiff = java.lang.Math.abs(block.baselineY - lastBlock.baselineY)
-            val xGap = block.boundingBox.left - lastBlock.boundingBox.right
-            // Ensure xGap is not too large (e.g. gap across columns). Max gap 3x font size.
-            if (yDiff < lastBlock.fontInfo.fontSize * 0.5f && xGap < lastBlock.fontInfo.fontSize * 3f) {
-                currentLine.add(block)
-            } else {
-                lines.add(currentLine)
-                currentLine = mutableListOf(block)
+            val lines = mutableListOf<MutableList<TextBlock>>()
+            var currentLine = mutableListOf(sortedBlocks.first())
+
+            for (i in 1 until sortedBlocks.size) {
+                val block = sortedBlocks[i]
+                val lastBlock = currentLine.last()
+
+                val yDiff = java.lang.Math.abs(block.baselineY - lastBlock.baselineY)
+                val xGap = block.boundingBox.left - lastBlock.boundingBox.right
+
+                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 5f) {
+                    currentLine.add(block)
+                } else {
+                    lines.add(currentLine)
+                    currentLine = mutableListOf(block)
+                }
+            }
+            lines.add(currentLine)
+            lines.forEach { line ->
+                line.sortBy { it.baselineX }
+                finalBlocks.add(mergeLineBlocks(line))
             }
         }
-        lines.add(currentLine)
 
-        // 3. Sort each line left-to-right (should already be mostly sorted, but just in case)
-        lines.forEach { line -> line.sortBy { it.baselineX } }
-
-        val paragraphs = mutableListOf<TextBlock>()
-        var currentParagraphLines = mutableListOf(lines.first())
-
-        // 4. Group lines into paragraphs
-        for (i in 1 until lines.size) {
-            val line = lines[i]
-            val lastLine = currentParagraphLines.last()
-            
-            val lastLineFirstBlock = lastLine.first()
-            val lineFirstBlock = line.first()
-            
-            val yDiff = java.lang.Math.abs(lineFirstBlock.baselineY - lastLineFirstBlock.baselineY)
-            val expectedLineHeight = lastLineFirstBlock.fontInfo.fontSize * 1.8f // typical max line height
-            
-            // Check horizontal alignment to avoid merging columns
-            val xAlignDiff = java.lang.Math.abs(lineFirstBlock.baselineX - lastLineFirstBlock.baselineX)
-            val isAligned = xAlignDiff < lastLineFirstBlock.fontInfo.fontSize * 2.0f
-            
-            // Check if font, color matches, and it's physically close enough
-            val isSameFont = lastLineFirstBlock.fontInfo.fontName == lineFirstBlock.fontInfo.fontName
-            val isSameColor = lastLineFirstBlock.color == lineFirstBlock.color
-            
-            if (isSameFont && isSameColor && yDiff <= expectedLineHeight && isAligned) {
-                currentParagraphLines.add(line)
-            } else {
-                paragraphs.add(mergeLinesToParagraph(currentParagraphLines))
-                currentParagraphLines = mutableListOf(line)
-            }
-        }
-        paragraphs.add(mergeLinesToParagraph(currentParagraphLines))
-
-        return paragraphs
+        return finalBlocks
     }
 
-    private fun mergeLinesToParagraph(lines: List<List<TextBlock>>): TextBlock {
-        val firstBlock = lines.first().first()
-        
+    // Merges only the runs that make up ONE visual line (e.g. separate Tj/TJ runs for "Hello"
+    // and "World" on the same baseline) into a single editable unit. Never combines runs from
+    // different lines.
+    private fun mergeLineBlocks(line: List<TextBlock>): TextBlock {
+        val firstBlock = line.first()
+        if (line.size == 1) return firstBlock
+
         val mergedText = java.lang.StringBuilder()
         val mergedIndices = mutableListOf<Int>()
         var minX = Float.MAX_VALUE
@@ -147,44 +131,41 @@ class PdfRepositoryImpl @Inject constructor(
         var maxX = Float.MIN_VALUE
         var maxY = Float.MIN_VALUE
 
-        for (i in lines.indices) {
-            val line = lines[i]
-            var lineText = ""
-            for (j in line.indices) {
-                val block = line[j]
-                
-                // Add space if there is a horizontal gap between blocks on the same line
-                if (j > 0) {
-                    val prevBlock = line[j - 1]
-                    val gap = block.baselineX - (prevBlock.baselineX + (prevBlock.fontInfo.fontSize * prevBlock.text.length * 0.5f)) // rough estimate of width
-                    if (gap > prevBlock.fontInfo.fontSize * 0.2f && !lineText.endsWith(" ")) {
-                        lineText += " "
-                    }
+        for (j in line.indices) {
+            val block = line[j]
+
+            // Add space if there is a horizontal gap between blocks on the same line
+            if (j > 0) {
+                val prevBlock = line[j - 1]
+                val gap = block.baselineX - (prevBlock.baselineX + (prevBlock.fontInfo.fontSize * prevBlock.text.length * 0.5f)) // rough estimate of width
+                if (gap > prevBlock.fontInfo.fontSize * 0.2f && !mergedText.endsWith(" ")) {
+                    mergedText.append(" ")
                 }
-                
-                lineText += block.text
-                mergedIndices.addAll(block.anchor.runIndices)
-                
-                minX = minOf(minX, block.boundingBox.left)
-                minY = minOf(minY, block.boundingBox.top)
-                maxX = maxOf(maxX, block.boundingBox.right)
-                maxY = maxOf(maxY, block.boundingBox.bottom)
             }
-            mergedText.append(lineText)
-            if (i < lines.size - 1) {
-                mergedText.append("\n")
-            }
+
+            mergedText.append(block.text)
+            mergedIndices.addAll(block.anchor.runIndices)
+
+            minX = minOf(minX, block.boundingBox.left)
+            minY = minOf(minY, block.boundingBox.top)
+            maxX = maxOf(maxX, block.boundingBox.right)
+            maxY = maxOf(maxY, block.boundingBox.bottom)
         }
 
         return firstBlock.copy(
             id = "merged_${firstBlock.id}",
             text = mergedText.toString(),
             boundingBox = com.genx.ai.photo.editpdf.domain.model.PdfRect(minX, minY, maxX, maxY),
-            anchor = com.genx.ai.photo.editpdf.domain.model.PdfAnchor(mergedIndices, firstBlock.anchor.xobjectPath)
+            anchor = PdfAnchor(mergedIndices, firstBlock.anchor.xobjectPath)
         )
     }
 
     // TODO: Support batch text edits in a single operation (one undo entry for multiple block changes)
+    //
+    // Never shifts any other block on the page. Each TextBlock now corresponds to exactly one
+    // visual line (see mergeTextBlocks) written at its own original anchor, so an edit here can
+    // only ever rewrite that line's own text-showing operator(s) — every other line and every
+    // other block keeps its original position untouched.
     override suspend fun applyTextEdit(blockId: String, newText: String, pageIndex: Int): Result<Unit> {
         return try {
             val block = textBlockCache[blockId] ?: return Result.failure(
@@ -192,7 +173,9 @@ class PdfRepositoryImpl @Inject constructor(
             )
 
             // Always write at the block's original anchor — never a position re-derived from
-            // the document's current (possibly already-edited) state.
+            // the document's current (possibly already-edited) state. No whiteout/overlay: the
+            // engine mutates the original text-showing operator's own operand directly, which is
+            // what makes the old glyphs stop being drawn.
             val success = pdfEngine.replaceText(pageIndex, newText, block.anchor)
             if (success) {
                 val editOp = EditOperation.TextEdit(
@@ -203,7 +186,9 @@ class PdfRepositoryImpl @Inject constructor(
                 )
                 undoStack.addLast(editOp)
                 redoStack.clear() // Clear redo stack on new edit
+
                 textBlockCache[blockId] = block.copy(text = newText)
+
                 Result.success(Unit)
             } else {
                 Result.failure(Exception("Failed to replace text in content stream"))
@@ -236,6 +221,7 @@ class PdfRepositoryImpl @Inject constructor(
         return try {
             val op = undoStack.removeLast()
             val block = textBlockCache[op.blockId] ?: return Result.failure(Exception("Block not found"))
+
             val success = pdfEngine.replaceText(op.pageIndex, op.originalText, block.anchor)
             if (success) {
                 textBlockCache[op.blockId] = block.copy(text = op.originalText)
@@ -257,6 +243,7 @@ class PdfRepositoryImpl @Inject constructor(
         return try {
             val op = redoStack.removeLast()
             val block = textBlockCache[op.blockId] ?: return Result.failure(Exception("Block not found"))
+
             val success = pdfEngine.replaceText(op.pageIndex, op.newText, block.anchor)
             if (success) {
                 textBlockCache[op.blockId] = block.copy(text = op.newText)

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
@@ -37,6 +39,12 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -48,6 +56,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -59,6 +70,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusRequester
@@ -105,6 +117,7 @@ fun PdfViewerScreen(
 
     var textValue by remember { mutableStateOf("") }
     var isEditing by remember { mutableStateOf(false) }
+    var isEditMode by remember { mutableStateOf(false) }
 
     androidx.compose.runtime.LaunchedEffect(state.selectedTextBlock) {
         if (state.selectedTextBlock != null) {
@@ -137,7 +150,9 @@ fun PdfViewerScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { onConfirmEdit(textValue) }) {
+                        IconButton(onClick = {
+                            onConfirmEdit(textValue)
+                        }) {
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = "Save",
@@ -207,45 +222,77 @@ fun PdfViewerScreen(
             }
         },
         bottomBar = {
-            state.pdfDocument?.let { doc ->
-                Row(
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF8F9FA))
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.background)
-                        .padding(vertical = 16.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isEditMode) Color(0xFFE8F0FE) else Color.Transparent)
+                        .clickable { isEditMode = !isEditMode }
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
                 ) {
-                    IconButton(
-                        onClick = { onPageChanged(state.currentPageIndex - 1) },
-                        enabled = state.currentPageIndex > 0
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ChevronLeft,
-                            contentDescription = "Previous Page",
-                            tint = if (state.currentPageIndex > 0) NeonCyan
-                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = "Page ${state.currentPageIndex + 1} of ${doc.pageCount}",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit text",
+                        tint = if (isEditMode) Color(0xFF1A73E8) else Color.DarkGray,
+                        modifier = Modifier.size(24.dp)
                     )
-                    Spacer(modifier = Modifier.width(16.dp))
-                    IconButton(
-                        onClick = { onPageChanged(state.currentPageIndex + 1) },
-                        enabled = state.currentPageIndex < doc.pageCount - 1
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ChevronRight,
-                            contentDescription = "Next Page",
-                            tint = if (state.currentPageIndex < doc.pageCount - 1) NeonCyan
-                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Edit text",
+                        fontSize = 12.sp,
+                        color = if (isEditMode) Color(0xFF1A73E8) else Color.DarkGray,
+                        fontWeight = if (isEditMode) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+                
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { /* TODO: Insert Text */ }
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "T+",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.DarkGray
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Insert text",
+                        fontSize = 12.sp,
+                        color = Color.DarkGray
+                    )
+                }
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { /* TODO: Insert Images */ }
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = "Insert Images",
+                        tint = Color.DarkGray,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Insert Images",
+                        fontSize = 12.sp,
+                        color = Color.DarkGray
+                    )
                 }
             }
         },
@@ -258,18 +305,46 @@ fun PdfViewerScreen(
                 .padding(innerPadding),
             contentAlignment = Alignment.Center
         ) {
-            if (state.isLoading) {
-                CircularProgressIndicator(color = NeonCyan)
-            } else {
-                state.renderedBitmap?.let { bitmap ->
-                    val page = state.pdfDocument?.pages?.getOrNull(state.currentPageIndex)
-                    if (page != null) {
+            val pageCount = state.pdfDocument?.pageCount ?: 1
+            val pagerState = rememberPagerState(
+                initialPage = state.currentPageIndex,
+                pageCount = { pageCount }
+            )
 
-                        BoxWithConstraints(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            // Container size in px (for coordinate inverse math)
+            androidx.compose.runtime.LaunchedEffect(pagerState) {
+                androidx.compose.runtime.snapshotFlow { pagerState.currentPage }.collect { page ->
+                    if (page != state.currentPageIndex) {
+                        onPageChanged(page)
+                    }
+                }
+            }
+
+            androidx.compose.runtime.LaunchedEffect(state.currentPageIndex) {
+                if (pagerState.currentPage != state.currentPageIndex) {
+                    pagerState.animateScrollToPage(state.currentPageIndex)
+                }
+                scale = 1f
+                offset = Offset.Zero
+            }
+
+            VerticalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                userScrollEnabled = scale == 1f
+            ) { pageIndex ->
+                if (pageIndex == state.currentPageIndex) {
+                    if (state.isLoading) {
+                        CircularProgressIndicator(color = NeonCyan)
+                    } else {
+                        state.renderedBitmap?.let { bitmap ->
+                            val page = state.pdfDocument?.pages?.getOrNull(state.currentPageIndex)
+                            if (page != null) {
+
+                                BoxWithConstraints(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    // Container size in px (for coordinate inverse math)
                             val containerWidthPx = constraints.maxWidth.toFloat()
                             val containerHeightPx = constraints.maxHeight.toFloat()
                             val density = LocalDensity.current
@@ -396,7 +471,7 @@ fun PdfViewerScreen(
                                                         offset = newOffset
                                                     }
                                                     event.changes.forEach { change ->
-                                                        if (change.positionChanged()) change.consume()
+                                                        if (change.positionChanged() && scale > 1f) change.consume()
                                                     }
                                                 }
                                             } while (event.changes.any { it.pressed })
@@ -486,6 +561,35 @@ fun PdfViewerScreen(
                                         modifier = Modifier.fillMaxSize()
                                     )
 
+                                    // DASHED BORDERS FOR ALL TEXT BLOCKS WHEN EDIT MODE IS ON
+                                    if (isEditMode) {
+                                        state.textBlocks.forEach { block ->
+                                            if (block != state.selectedTextBlock) {
+                                                val bb = block.boundingBox
+                                                val bLeft = (bb.left * scalePtToDp).dp
+                                                val bTop = (bb.top * scalePtToDp).dp
+                                                val bWidth = (bb.width * scalePtToDp).dp
+                                                val bHeight = (bb.height * scalePtToDp).dp
+                                                
+                                                Box(
+                                                    modifier = Modifier
+                                                        .offset(x = bLeft, y = bTop)
+                                                        .size(width = bWidth, height = bHeight)
+                                                        .drawWithContent {
+                                                            drawContent()
+                                                            drawRect(
+                                                                color = Color.Gray.copy(alpha = 0.5f),
+                                                                style = Stroke(
+                                                                    width = 2.dp.toPx(),
+                                                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
+                                                                )
+                                                            )
+                                                        }
+                                                )
+                                            }
+                                        }
+                                    }
+
                                     // INLINE EDIT OVERLAY / SELECTION
                                     state.selectedTextBlock?.let { block ->
                                         val bb = block.boundingBox
@@ -517,20 +621,38 @@ fun PdfViewerScreen(
                                             // Floating Menu (Edit, Copy, Delete)
                                             Box(
                                                 modifier = Modifier
-                                                    .offset(x = leftDp, y = topDp - 50.dp)
-                                                    .background(Color.White, RoundedCornerShape(8.dp))
-                                                    .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
-                                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                    .offset(x = leftDp, y = topDp - 70.dp) // Moved slightly higher for larger menu
+                                                    .background(Color.White, RoundedCornerShape(12.dp))
+                                                    .border(1.dp, Color.LightGray.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                                    .padding(horizontal = 12.dp, vertical = 8.dp)
                                             ) {
-                                                androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    IconButton(onClick = { isEditing = true }, modifier = Modifier.size(36.dp)) {
-                                                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = Color.Black, modifier = Modifier.size(20.dp))
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column(
+                                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                                        modifier = Modifier.clickable { isEditing = true }
+                                                    ) {
+                                                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = Color.Black, modifier = Modifier.size(24.dp))
+                                                        Spacer(modifier = Modifier.height(4.dp))
+                                                        Text("Edit", fontSize = 12.sp, color = Color.Black)
                                                     }
-                                                    IconButton(onClick = { /* TODO: Copy */ }, modifier = Modifier.size(36.dp)) {
+                                                    Column(
+                                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                                        modifier = Modifier.clickable { /* TODO: Copy */ }
+                                                    ) {
+                                                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Black, modifier = Modifier.size(24.dp))
+                                                        Spacer(modifier = Modifier.height(4.dp))
                                                         Text("Copy", fontSize = 12.sp, color = Color.Black)
                                                     }
-                                                    IconButton(onClick = { /* TODO: Delete */ }, modifier = Modifier.size(36.dp)) {
-                                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Black, modifier = Modifier.size(20.dp))
+                                                    Column(
+                                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                                        modifier = Modifier.clickable { /* TODO: Delete */ }
+                                                    ) {
+                                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Black, modifier = Modifier.size(24.dp))
+                                                        Spacer(modifier = Modifier.height(4.dp))
+                                                        Text("Delete", fontSize = 12.sp, color = Color.Black)
                                                     }
                                                 }
                                             }
@@ -541,20 +663,36 @@ fun PdfViewerScreen(
                                                 focusRequester.requestFocus()
                                             }
 
-                                            androidx.compose.foundation.text.BasicTextField(
-                                                value = textValue,
-                                                onValueChange = { textValue = it },
+                                            val fontSizeSpVal = with(LocalDensity.current) { (block.fontInfo.fontSize * scalePtToDp).dp.toSp() }
+
+                                            Box(
                                                 modifier = Modifier
-                                                    .offset(x = leftDp, y = topDp)
-                                                    .widthIn(min = widthDp, max = (displayWidthDp.dp - leftDp))
-                                                    .focusRequester(focusRequester)
+                                                    .offset(x = leftDp, y = topDp - 2.dp)
+                                                    .defaultMinSize(minWidth = widthDp, minHeight = heightDp + 4.dp)
                                                     .background(Color.White)
-                                                    .border(1.dp, Color.LightGray),
-                                                textStyle = androidx.compose.ui.text.TextStyle(
-                                                    fontSize = fontSizeSp.sp,
-                                                    color = Color.Black
+                                                    .border(1.dp, NeonCyan, RoundedCornerShape(2.dp))
+                                                    .padding(horizontal = 2.dp),
+                                                contentAlignment = Alignment.CenterStart
+                                            ) {
+                                                androidx.compose.foundation.text.BasicTextField(
+                                                    value = textValue,
+                                                    onValueChange = { textValue = it.replace(Regex("[\\r\\n]"), "") },
+                                                    singleLine = true,
+                                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                                        imeAction = androidx.compose.ui.text.input.ImeAction.Done
+                                                    ),
+                                                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                                        onDone = { onConfirmEdit(textValue) }
+                                                    ),
+                                                    modifier = Modifier
+                                                        .widthIn(min = widthDp)
+                                                        .focusRequester(focusRequester),
+                                                    textStyle = androidx.compose.ui.text.TextStyle(
+                                                        fontSize = fontSizeSpVal,
+                                                        color = Color.Black
+                                                    )
                                                 )
-                                            )
+                                            }
                                         }
                                     }
                                 }
@@ -565,6 +703,12 @@ fun PdfViewerScreen(
                     text = "No page loaded.",
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                 )
+            }
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = NeonCyan)
+                    }
+                }
             }
 
             // Error Message Dialog
@@ -593,6 +737,24 @@ fun PdfViewerScreen(
                     },
                     containerColor = MaterialTheme.colorScheme.surface
                 )
+            }
+
+            // Floating Page Indicator
+            state.pdfDocument?.let { doc ->
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(16.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "${state.currentPageIndex + 1}/${doc.pageCount}",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

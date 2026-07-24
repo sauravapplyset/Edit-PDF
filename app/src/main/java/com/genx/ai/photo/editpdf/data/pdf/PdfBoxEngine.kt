@@ -88,10 +88,12 @@ class PdfBoxEngine @Inject constructor(
     override suspend fun replaceText(
         pageIndex: Int,
         newText: String,
-        anchor: PdfAnchor
+        anchor: PdfAnchor,
+        shiftY: Float,
+        shiftAnchors: List<PdfAnchor>
     ): Boolean = withContext(Dispatchers.IO) {
         val document = activeDocument ?: throw IllegalStateException("No active document")
-        textEditor.replaceTextRun(document, pageIndex, anchor, newText)
+        textEditor.replaceTextRun(document, pageIndex, anchor, newText, shiftY, shiftAnchors)
     }
 
     // TODO: Add PDF compression option before saving (reduce file size for large PDFs)
