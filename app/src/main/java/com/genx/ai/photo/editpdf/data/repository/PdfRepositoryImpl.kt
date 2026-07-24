@@ -120,7 +120,7 @@ class PdfRepositoryImpl @Inject constructor(
                 val xGap = block.boundingBox.left - lastBlock.boundingBox.right
 
                 // Allow larger xGap to support justified text and table of contents dots, but prevent merging separate columns
-                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 8.0f && xGap > -lastBlock.fontInfo.fontSize * 0.5f) {
+                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 8.0f && xGap > -lastBlock.fontInfo.fontSize * 3.0f) {
                     currentLine.add(block)
                 } else {
                     lines.add(currentLine)
@@ -143,11 +143,10 @@ class PdfRepositoryImpl @Inject constructor(
                     val lastInGroup = group.last()
                     val verticalGap = lineBlock.boundingBox.top - lastInGroup.boundingBox.bottom
                     
-                    // Also ensure they have similar font sizes and styles to prevent merging headings with paragraphs
+                    // Also ensure they have similar font sizes to prevent merging headings with paragraphs
                     val fontSizeRatio = lineBlock.fontInfo.fontSize / lastInGroup.fontInfo.fontSize
                     val hasSimilarFontSize = fontSizeRatio > 0.85f && fontSizeRatio < 1.15f
-                    val hasSameStyle = lineBlock.fontInfo.isBold == lastInGroup.fontInfo.isBold && lineBlock.fontInfo.isItalic == lastInGroup.fontInfo.isItalic
-                    if (hasSimilarFontSize && hasSameStyle && verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
+                    if (hasSimilarFontSize && verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
                         val overlapX = maxOf(0f, minOf(lineBlock.boundingBox.right, lastInGroup.boundingBox.right) - maxOf(lineBlock.boundingBox.left, lastInGroup.boundingBox.left))
                         val minWidth = minOf(lineBlock.boundingBox.width, lastInGroup.boundingBox.width)
                         val leftDiff = java.lang.Math.abs(lineBlock.boundingBox.left - lastInGroup.boundingBox.left)
