@@ -90,18 +90,37 @@ class PdfRepositoryImpl @Inject constructor(
         for ((_, pathBlocks) in groupedByPath) {
             val sortedBlocks = pathBlocks.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
 
-            val lines = mutableListOf<MutableList<TextBlock>>()
-            var currentLine = mutableListOf(sortedBlocks.first())
+            val deduplicatedBlocks = mutableListOf<TextBlock>()
+            for (block in sortedBlocks) {
+                val shadowOf = deduplicatedBlocks.find { 
+                    it.text == block.text && 
+                    java.lang.Math.abs(it.boundingBox.left - block.boundingBox.left) < it.fontInfo.fontSize &&
+                    java.lang.Math.abs(it.boundingBox.top - block.boundingBox.top) < it.fontInfo.fontSize * 0.5f
+                }
+                if (shadowOf != null) {
+                    val mergedIndices = (shadowOf.anchor.runIndices + block.anchor.runIndices).sorted()
+                    val index = deduplicatedBlocks.indexOf(shadowOf)
+                    deduplicatedBlocks[index] = shadowOf.copy(
+                        anchor = shadowOf.anchor.copy(runIndices = mergedIndices)
+                    )
+                } else {
+                    deduplicatedBlocks.add(block)
+                }
+            }
 
-            for (i in 1 until sortedBlocks.size) {
-                val block = sortedBlocks[i]
+            val lines = mutableListOf<MutableList<TextBlock>>()
+            if (deduplicatedBlocks.isEmpty()) continue
+            var currentLine = mutableListOf(deduplicatedBlocks.first())
+
+            for (i in 1 until deduplicatedBlocks.size) {
+                val block = deduplicatedBlocks[i]
                 val lastBlock = currentLine.last()
 
                 val yDiff = java.lang.Math.abs(block.boundingBox.top - lastBlock.boundingBox.top)
                 val xGap = block.boundingBox.left - lastBlock.boundingBox.right
 
-                // Allow larger xGap to support justified text, but prevent merging separate columns
-                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 4.0f && xGap > -lastBlock.fontInfo.fontSize * 0.5f) {
+                // Allow larger xGap to support justified text and table of contents dots, but prevent merging separate columns
+                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 8.0f && xGap > -lastBlock.fontInfo.fontSize * 0.5f) {
                     currentLine.add(block)
                 } else {
                     lines.add(currentLine)
