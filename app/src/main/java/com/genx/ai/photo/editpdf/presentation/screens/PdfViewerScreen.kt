@@ -833,13 +833,9 @@ fun PdfViewerScreen(
                                                 androidx.compose.foundation.text.BasicTextField(
                                                     value = textValue,
                                                     onValueChange = { newValue ->
-                                                        if (newValue.text.contains("\n") || newValue.text.contains("\r")) {
-                                                            textValue = newValue.copy(text = newValue.text.replace(Regex("[\\r\\n]"), ""))
-                                                        } else {
-                                                            textValue = newValue
-                                                        }
+                                                        textValue = newValue
                                                     },
-                                                    singleLine = true,
+                                                    singleLine = false,
                                                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                                         imeAction = androidx.compose.ui.text.input.ImeAction.Done
                                                     ),

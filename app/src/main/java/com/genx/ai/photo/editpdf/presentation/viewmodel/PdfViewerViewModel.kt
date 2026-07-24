@@ -109,7 +109,7 @@ class PdfViewerViewModel @Inject constructor(
     fun expandSelection(newRect: com.genx.ai.photo.editpdf.domain.model.PdfRect) {
         val currentBlocks = _uiState.value.textBlocks
         val intersectingBlocks = currentBlocks.filter { it.boundingBox.intersects(newRect) }
-            .sortedWith(compareBy({ it.baselineY }, { it.boundingBox.left }))
+            .sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
 
         if (intersectingBlocks.isEmpty()) return
 
@@ -125,7 +125,7 @@ class PdfViewerViewModel @Inject constructor(
             // If they are somewhat on the same line, use a space, otherwise newline
             if (j > 0) {
                 val prev = intersectingBlocks[j - 1]
-                if (java.lang.Math.abs(block.baselineY - prev.baselineY) > block.fontInfo.fontSize * 0.8f) {
+                if (java.lang.Math.abs(block.boundingBox.top - prev.boundingBox.top) > block.fontInfo.fontSize * 0.8f) {
                     mergedText.append("\n")
                 } else {
                     mergedText.append(" ")

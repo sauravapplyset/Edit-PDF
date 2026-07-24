@@ -88,7 +88,7 @@ class PdfRepositoryImpl @Inject constructor(
         val finalBlocks = mutableListOf<TextBlock>()
 
         for ((_, pathBlocks) in groupedByPath) {
-            val sortedBlocks = pathBlocks.sortedWith(compareBy({ it.baselineY }, { it.baselineX }))
+            val sortedBlocks = pathBlocks.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
 
             val lines = mutableListOf<MutableList<TextBlock>>()
             var currentLine = mutableListOf(sortedBlocks.first())
@@ -97,7 +97,7 @@ class PdfRepositoryImpl @Inject constructor(
                 val block = sortedBlocks[i]
                 val lastBlock = currentLine.last()
 
-                val yDiff = java.lang.Math.abs(block.baselineY - lastBlock.baselineY)
+                val yDiff = java.lang.Math.abs(block.boundingBox.top - lastBlock.boundingBox.top)
                 val xGap = block.boundingBox.left - lastBlock.boundingBox.right
 
                 if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 1.2f) {
@@ -111,7 +111,7 @@ class PdfRepositoryImpl @Inject constructor(
             
             val lineBlocks = mutableListOf<TextBlock>()
             lines.forEach { line ->
-                line.sortBy { it.baselineX }
+                line.sortBy { it.boundingBox.left }
                 lineBlocks.add(mergeLineBlocks(line))
             }
 
@@ -203,7 +203,7 @@ class PdfRepositoryImpl @Inject constructor(
             // Add space if there is a horizontal gap between blocks on the same line
             if (j > 0) {
                 val prevBlock = line[j - 1]
-                val gap = block.baselineX - (prevBlock.baselineX + (prevBlock.fontInfo.fontSize * prevBlock.text.length * 0.5f)) // rough estimate of width
+                val gap = block.boundingBox.left - (prevBlock.boundingBox.left + (prevBlock.fontInfo.fontSize * prevBlock.text.length * 0.5f)) // rough estimate of width
                 if (gap > prevBlock.fontInfo.fontSize * 0.2f && !mergedText.endsWith(" ")) {
                     mergedText.append(" ")
                 }
