@@ -108,13 +108,79 @@ class PdfRepositoryImpl @Inject constructor(
                 }
             }
             lines.add(currentLine)
+            
+            val lineBlocks = mutableListOf<TextBlock>()
             lines.forEach { line ->
                 line.sortBy { it.baselineX }
-                finalBlocks.add(mergeLineBlocks(line))
+                lineBlocks.add(mergeLineBlocks(line))
+            }
+
+            // Vertical grouping pass for cells
+            val cellGroups = mutableListOf<MutableList<TextBlock>>()
+            for (lineBlock in lineBlocks) {
+                var addedToGroup = false
+                for (group in cellGroups) {
+                    val lastInGroup = group.last()
+                    val verticalGap = lineBlock.boundingBox.top - lastInGroup.boundingBox.bottom
+                    
+                    // Check if vertically close (allow overlap up to 1 fontSize, or gap up to 1.5 fontSize)
+                    if (verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
+                        val overlapX = maxOf(0f, minOf(lineBlock.boundingBox.right, lastInGroup.boundingBox.right) - maxOf(lineBlock.boundingBox.left, lastInGroup.boundingBox.left))
+                        val minWidth = minOf(lineBlock.boundingBox.width, lastInGroup.boundingBox.width)
+                        val leftDiff = java.lang.Math.abs(lineBlock.boundingBox.left - lastInGroup.boundingBox.left)
+                        
+                        // Merge if they significantly overlap horizontally OR are left-aligned
+                        if (overlapX > minWidth * 0.5f || leftDiff < lastInGroup.fontInfo.fontSize * 2f) {
+                            group.add(lineBlock)
+                            addedToGroup = true
+                            break
+                        }
+                    }
+                }
+                if (!addedToGroup) {
+                    cellGroups.add(mutableListOf(lineBlock))
+                }
+            }
+
+            cellGroups.forEach { group ->
+                finalBlocks.add(mergeVerticalBlocks(group))
             }
         }
 
         return finalBlocks
+    }
+
+    private fun mergeVerticalBlocks(group: List<TextBlock>): TextBlock {
+        val firstBlock = group.first()
+        if (group.size == 1) return firstBlock
+
+        val mergedText = java.lang.StringBuilder()
+        val mergedIndices = mutableListOf<Int>()
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE
+        var maxY = Float.MIN_VALUE
+
+        for (j in group.indices) {
+            val block = group[j]
+            if (j > 0) mergedText.append("\n")
+            mergedText.append(block.text)
+            mergedIndices.addAll(block.anchor.runIndices)
+
+            minX = minOf(minX, block.boundingBox.left)
+            minY = minOf(minY, block.boundingBox.top)
+            maxX = maxOf(maxX, block.boundingBox.right)
+            maxY = maxOf(maxY, block.boundingBox.bottom)
+        }
+
+        mergedIndices.sort()
+
+        return firstBlock.copy(
+            id = "merged_v_${firstBlock.id}",
+            text = mergedText.toString(),
+            boundingBox = com.genx.ai.photo.editpdf.domain.model.PdfRect(minX, minY, maxX, maxY),
+            anchor = PdfAnchor(mergedIndices, firstBlock.anchor.xobjectPath)
+        )
     }
 
     // Merges only the runs that make up ONE visual line (e.g. separate Tj/TJ runs for "Hello"

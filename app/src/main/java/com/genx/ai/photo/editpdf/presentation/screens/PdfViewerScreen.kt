@@ -530,7 +530,11 @@ fun PdfViewerScreen(
                                                         // Prefer the smallest block (most specific hit)
                                                         block.boundingBox.width * block.boundingBox.height
                                                     }
-                                                tappedBlock?.let { onTextBlockClick(it) }
+                                                if (tappedBlock != null) {
+                                                    onTextBlockClick(tappedBlock)
+                                                } else {
+                                                    onDismissEdit()
+                                                }
                                             }
                                         }
                                     },
