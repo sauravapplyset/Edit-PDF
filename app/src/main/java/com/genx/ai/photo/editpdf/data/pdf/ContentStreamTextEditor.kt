@@ -125,72 +125,98 @@ class ContentStreamTextEditor {
         var resourcesTouched = false
         val operandIndices = mutableListOf<Int>()
 
+        var currentCharSpacing = 0f
+        var currentWordSpacing = 0f
+        var currentHorizontalScaling = 100f
+        var currentFontSize = 12f
+
         var i = 0
         outer@ while (i < tokens.size) {
             when (val token = tokens[i]) {
                 is COSBase -> operandIndices.add(i)
                 is Operator -> {
                     when (token.name) {
+                        "Tc" -> currentCharSpacing = (operandAt(tokens, operandIndices, 0) as? com.tom_roush.pdfbox.cos.COSNumber)?.floatValue() ?: 0f
+                        "Tw" -> currentWordSpacing = (operandAt(tokens, operandIndices, 0) as? com.tom_roush.pdfbox.cos.COSNumber)?.floatValue() ?: 0f
+                        "Tz" -> currentHorizontalScaling = (operandAt(tokens, operandIndices, 0) as? com.tom_roush.pdfbox.cos.COSNumber)?.floatValue() ?: 100f
                         "Tf" -> {
                             currentFontResourceName = operandAt(tokens, operandIndices, 0) as? COSName
                             currentFontSizeOperand = operandAt(tokens, operandIndices, 1)
+                            currentFontSize = (currentFontSizeOperand as? com.tom_roush.pdfbox.cos.COSNumber)?.floatValue() ?: 12f
                             currentFont = currentFontResourceName?.let { name ->
                                 runCatching { currentResources.getFont(name) }.getOrNull()
                             }
                         }
-                        "Tj", "'", "\"" -> {
+                        "Tj", "'", "\"", "TJ" -> {
                             if (anchor.runIndices.contains(textShowingCount)) {
+                                val isTJ = token.name == "TJ"
                                 val operandIndex = operandIndices.lastOrNull()
-                                if (operandIndex != null && tokens[operandIndex] is COSString) {
+                                if (operandIndex != null && (tokens[operandIndex] is COSString || tokens[operandIndex] is com.tom_roush.pdfbox.cos.COSArray)) {
                                     if (textShowingCount == anchor.runIndices.first()) {
+                                        val oldAdvance = calculateAdvancePx(tokens[operandIndex] as COSBase, currentFont, currentFontSize, currentCharSpacing, currentWordSpacing, currentHorizontalScaling)
+                                        
+                                        val lines = newText.split("\n")
+                                        val lastLineText = lines.last()
+                                        val encodedNew = encodeWithFallback(currentFont, lastLineText)
+                                        val newAdvance = calculateStringAdvancePx(encodedNew.bytes, encodedNew.font, currentFontSize, currentCharSpacing, currentWordSpacing, currentHorizontalScaling)
+                                        
+                                        var kerningTJ = 0f
+                                        if (currentFontSize != 0f && currentHorizontalScaling != 0f) {
+                                            val diff = oldAdvance - newAdvance
+                                            kerningTJ = - (diff * 1000f) / (currentFontSize * (currentHorizontalScaling / 100f))
+                                        }
+
+                                        var actualOpIdx = i
+                                        var actualOpndIdx = operandIndex
+                                        if (token.name == "'") {
+                                            tokens[i] = Operator.getOperator("Tj")
+                                            tokens.add(i, Operator.getOperator("T*"))
+                                            actualOpIdx = i + 1
+                                        } else if (token.name == "\"") {
+                                            if (operandIndices.size >= 3) {
+                                                val stringOp = tokens[operandIndices[2]]
+                                                val acOp = tokens[operandIndices[1]]
+                                                val awOp = tokens[operandIndices[0]]
+                                                
+                                                tokens[operandIndices[0]] = awOp
+                                                tokens.add(operandIndices[0] + 1, Operator.getOperator("Tw"))
+                                                tokens.add(operandIndices[0] + 2, acOp)
+                                                tokens.add(operandIndices[0] + 3, Operator.getOperator("Tc"))
+                                                tokens.add(operandIndices[0] + 4, Operator.getOperator("T*"))
+                                                tokens.add(operandIndices[0] + 5, stringOp)
+                                                tokens.add(operandIndices[0] + 6, Operator.getOperator("Tj"))
+                                                tokens.removeAt(i + 6) // remove original "
+                                                
+                                                actualOpndIdx = operandIndices[0] + 5
+                                                actualOpIdx = operandIndices[0] + 6
+                                                i = actualOpIdx
+                                            }
+                                        }
+                                        
                                         val result = applyMultiLineEdit(
-                                            page, tokens, i, operandIndex,
-                                            currentFont, currentFontResourceName, currentFontSizeOperand, newText, isArray = false
+                                            page, tokens, actualOpIdx, actualOpndIdx,
+                                            currentFont, currentFontResourceName, currentFontSizeOperand, newText, isArray = isTJ, kerningOffsetTJ = kerningTJ
                                         )
                                         edited = result.edited
                                         resourcesTouched = resourcesTouched || result.resourcesTouched
                                         i = result.newOperatorIndex
                                     } else {
-                                        tokens[operandIndex] = COSString("")
+                                        if (isTJ) {
+                                            val arr = tokens[operandIndex] as com.tom_roush.pdfbox.cos.COSArray
+                                            arr.clear()
+                                            arr.add(COSString(""))
+                                        } else {
+                                            tokens[operandIndex] = COSString("")
+                                        }
                                     }
                                 } else {
-                                    throw IllegalStateException("Found Tj at index $textShowingCount but operand is invalid. Operand index: $operandIndex")
+                                    throw IllegalStateException("Found ${token.name} at index $textShowingCount but operand is invalid. Operand index: $operandIndex")
                                 }
                                 if (textShowingCount == anchor.runIndices.last() && shiftAnchors.isEmpty()) break@outer
                             } else if (shiftAnchors.any { it.runIndices.first() == textShowingCount }) {
                                 val operandIndex = operandIndices.firstOrNull() ?: i
-                                tokens.add(operandIndex, COSFloat(0f))
-                                tokens.add(operandIndex + 1, COSFloat(shiftY))
-                                tokens.add(operandIndex + 2, Operator.getOperator("Td"))
-                                i += 3
-                            }
-                            textShowingCount++
-                        }
-                        "TJ" -> {
-                            if (anchor.runIndices.contains(textShowingCount)) {
-                                val operandIndex = operandIndices.lastOrNull()
-                                if (operandIndex != null && tokens[operandIndex] is COSArray) {
-                                    if (textShowingCount == anchor.runIndices.first()) {
-                                        val result = applyMultiLineEdit(
-                                            page, tokens, i, operandIndex,
-                                            currentFont, currentFontResourceName, currentFontSizeOperand, newText, isArray = true
-                                        )
-                                        edited = result.edited
-                                        resourcesTouched = resourcesTouched || result.resourcesTouched
-                                        i = result.newOperatorIndex
-                                    } else {
-                                        val arr = tokens[operandIndex] as COSArray
-                                        arr.clear()
-                                        arr.add(COSString(""))
-                                    }
-                                } else {
-                                    throw IllegalStateException("Found TJ at index $textShowingCount but operand is invalid. Operand index: $operandIndex")
-                                }
-                                if (textShowingCount == anchor.runIndices.last() && shiftAnchors.isEmpty()) break@outer
-                            } else if (shiftAnchors.any { it.runIndices.first() == textShowingCount }) {
-                                val operandIndex = operandIndices.firstOrNull() ?: i
-                                tokens.add(operandIndex, COSFloat(0f))
-                                tokens.add(operandIndex + 1, COSFloat(shiftY))
+                                tokens.add(operandIndex, com.tom_roush.pdfbox.cos.COSFloat(0f))
+                                tokens.add(operandIndex + 1, com.tom_roush.pdfbox.cos.COSFloat(shiftY))
                                 tokens.add(operandIndex + 2, Operator.getOperator("Td"))
                                 i += 3
                             }
@@ -254,6 +280,55 @@ class ContentStreamTextEditor {
         return tokens[idx] as? COSBase
     }
 
+    private fun calculateAdvancePx(
+        baseObj: COSBase,
+        font: PDFont?,
+        fontSize: Float,
+        charSpacing: Float,
+        wordSpacing: Float,
+        hScale: Float
+    ): Float {
+        if (font == null) return 0f
+        var total = 0f
+        if (baseObj is com.tom_roush.pdfbox.cos.COSString) {
+            total += calculateStringAdvancePx(baseObj.bytes, font, fontSize, charSpacing, wordSpacing, hScale)
+        } else if (baseObj is com.tom_roush.pdfbox.cos.COSArray) {
+            for (i in 0 until baseObj.size()) {
+                val item = baseObj.get(i)
+                if (item is com.tom_roush.pdfbox.cos.COSString) {
+                    total += calculateStringAdvancePx(item.bytes, font, fontSize, charSpacing, wordSpacing, hScale)
+                } else if (item is com.tom_roush.pdfbox.cos.COSNumber) {
+                    val w = item.floatValue()
+                    total -= (w / 1000f) * fontSize * (hScale / 100f)
+                }
+            }
+        }
+        return total
+    }
+
+    private fun calculateStringAdvancePx(
+        bytes: ByteArray,
+        font: PDFont,
+        fontSize: Float,
+        charSpacing: Float,
+        wordSpacing: Float,
+        hScale: Float
+    ): Float {
+        var totalAdvance = 0f
+        val input = java.io.ByteArrayInputStream(bytes)
+        try {
+            while (input.available() > 0) {
+                val code = font.readCode(input)
+                val glyphWidthEm = runCatching { font.getWidth(code) / 1000f }.getOrDefault(0.5f)
+                val isSpace = runCatching { font.toUnicode(code) == " " }.getOrDefault(false)
+                val tx = (glyphWidthEm * fontSize + charSpacing + (if (isSpace) wordSpacing else 0f)) * (hScale / 100f)
+                totalAdvance += tx
+            }
+        } catch (e: Exception) {
+        }
+        return totalAdvance
+    }
+
     private data class MultiEditResult(val edited: Boolean, val resourcesTouched: Boolean, val newOperatorIndex: Int)
 
     private fun applyMultiLineEdit(
@@ -265,7 +340,8 @@ class ContentStreamTextEditor {
         currentFontResourceName: COSName?,
         currentFontSizeOperand: COSBase?,
         newText: String,
-        isArray: Boolean
+        isArray: Boolean,
+        kerningOffsetTJ: Float = 0f
     ): MultiEditResult {
         val lines = newText.split("\n")
         var resourcesTouched = false
@@ -277,20 +353,27 @@ class ContentStreamTextEditor {
             
             if (i == 0) {
                 // First line replaces the original operator in place
+                val newArray = com.tom_roush.pdfbox.cos.COSArray()
                 if (isArray) {
                     val oldArray = tokens[operandIndex] as? com.tom_roush.pdfbox.cos.COSArray
-                    val newArray = com.tom_roush.pdfbox.cos.COSArray()
                     if (oldArray != null) {
                         for (k in 0 until oldArray.size()) {
                             val item = oldArray.get(k)
                             if (item is com.tom_roush.pdfbox.cos.COSNumber) newArray.add(item) else break
                         }
                     }
-                    newArray.add(COSString(encoded.bytes))
-                    tokens[operandIndex] = newArray
-                } else {
-                    tokens[operandIndex] = COSString(encoded.bytes)
                 }
+                newArray.add(COSString(encoded.bytes))
+                
+                if (i == lines.size - 1 && kerningOffsetTJ != 0f) {
+                    newArray.add(com.tom_roush.pdfbox.cos.COSFloat(kerningOffsetTJ))
+                }
+                
+                tokens[operandIndex] = newArray
+                if (!isArray) {
+                    tokens[currentOpIdx] = Operator.getOperator("TJ")
+                }
+
                 if (encoded.substituted) {
                     spliceSubstituteFont(page, tokens, operandIndex, encoded.font, currentFontResourceName, currentFontSizeOperand)
                     resourcesTouched = true
@@ -307,8 +390,14 @@ class ContentStreamTextEditor {
                 tokens.add(currentOpIdx + 3, Operator.getOperator("Td"))
                 
                 // Insert string and Tj
-                tokens.add(currentOpIdx + 4, COSString(encoded.bytes))
-                tokens.add(currentOpIdx + 5, Operator.getOperator("Tj"))
+                val newArray = com.tom_roush.pdfbox.cos.COSArray()
+                newArray.add(COSString(encoded.bytes))
+                if (i == lines.size - 1 && kerningOffsetTJ != 0f) {
+                    newArray.add(com.tom_roush.pdfbox.cos.COSFloat(kerningOffsetTJ))
+                }
+                
+                tokens.add(currentOpIdx + 4, newArray)
+                tokens.add(currentOpIdx + 5, Operator.getOperator("TJ"))
                 
                 if (encoded.substituted) {
                     spliceSubstituteFont(page, tokens, currentOpIdx + 4, encoded.font, currentFontResourceName, currentFontSizeOperand)
