@@ -115,7 +115,7 @@ class PdfRepositoryImpl @Inject constructor(
                 lineBlocks.add(mergeLineBlocks(line))
             }
 
-            // Vertical grouping pass for cells
+            // Vertical grouping pass for cells and paragraphs
             val cellGroups = mutableListOf<MutableList<TextBlock>>()
             for (lineBlock in lineBlocks) {
                 var addedToGroup = false
@@ -123,14 +123,14 @@ class PdfRepositoryImpl @Inject constructor(
                     val lastInGroup = group.last()
                     val verticalGap = lineBlock.boundingBox.top - lastInGroup.boundingBox.bottom
                     
-                    // Check if vertically close (allow overlap up to 1 fontSize, or gap up to 1.5 fontSize)
-                    if (verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
+                    // Check if vertically close (allow overlap, or gap up to 2.5 fontSize for paragraph line spacing)
+                    if (verticalGap > -lastInGroup.fontInfo.fontSize * 2f && verticalGap < lastInGroup.fontInfo.fontSize * 2.5f) {
                         val overlapX = maxOf(0f, minOf(lineBlock.boundingBox.right, lastInGroup.boundingBox.right) - maxOf(lineBlock.boundingBox.left, lastInGroup.boundingBox.left))
                         val minWidth = minOf(lineBlock.boundingBox.width, lastInGroup.boundingBox.width)
                         val leftDiff = java.lang.Math.abs(lineBlock.boundingBox.left - lastInGroup.boundingBox.left)
                         
-                        // Merge if they significantly overlap horizontally OR are left-aligned
-                        if (overlapX > minWidth * 0.5f || leftDiff < lastInGroup.fontInfo.fontSize * 2f) {
+                        // Merge if they significantly overlap horizontally (paragraph lines) OR are left-aligned
+                        if (overlapX > minWidth * 0.3f || leftDiff < lastInGroup.fontInfo.fontSize * 5f) {
                             group.add(lineBlock)
                             addedToGroup = true
                             break
