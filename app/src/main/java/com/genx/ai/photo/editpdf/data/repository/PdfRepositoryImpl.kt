@@ -100,7 +100,8 @@ class PdfRepositoryImpl @Inject constructor(
                 val yDiff = java.lang.Math.abs(block.boundingBox.top - lastBlock.boundingBox.top)
                 val xGap = block.boundingBox.left - lastBlock.boundingBox.right
 
-                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 1.2f) {
+                // Allow larger xGap to support justified text, but prevent merging separate columns
+                if (yDiff < lastBlock.fontInfo.fontSize * 0.8f && xGap < lastBlock.fontInfo.fontSize * 4.0f && xGap > -lastBlock.fontInfo.fontSize * 0.5f) {
                     currentLine.add(block)
                 } else {
                     lines.add(currentLine)
@@ -124,7 +125,10 @@ class PdfRepositoryImpl @Inject constructor(
                     val verticalGap = lineBlock.boundingBox.top - lastInGroup.boundingBox.bottom
                     
                     // Check if vertically close (allow overlap up to 1 fontSize, or gap up to 1.5 fontSize)
-                    if (verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
+                    // Also ensure they have similar font sizes to prevent merging headings with paragraphs
+                    val fontSizeRatio = lineBlock.fontInfo.fontSize / lastInGroup.fontInfo.fontSize
+                    val hasSimilarFontSize = fontSizeRatio > 0.85f && fontSizeRatio < 1.15f
+                    if (hasSimilarFontSize && verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
                         val overlapX = maxOf(0f, minOf(lineBlock.boundingBox.right, lastInGroup.boundingBox.right) - maxOf(lineBlock.boundingBox.left, lastInGroup.boundingBox.left))
                         val minWidth = minOf(lineBlock.boundingBox.width, lastInGroup.boundingBox.width)
                         val leftDiff = java.lang.Math.abs(lineBlock.boundingBox.left - lastInGroup.boundingBox.left)
