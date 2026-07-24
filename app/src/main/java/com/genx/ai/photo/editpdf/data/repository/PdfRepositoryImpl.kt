@@ -124,11 +124,11 @@ class PdfRepositoryImpl @Inject constructor(
                     val lastInGroup = group.last()
                     val verticalGap = lineBlock.boundingBox.top - lastInGroup.boundingBox.bottom
                     
-                    // Check if vertically close (allow overlap up to 1 fontSize, or gap up to 1.5 fontSize)
-                    // Also ensure they have similar font sizes to prevent merging headings with paragraphs
+                    // Also ensure they have similar font sizes and styles to prevent merging headings with paragraphs
                     val fontSizeRatio = lineBlock.fontInfo.fontSize / lastInGroup.fontInfo.fontSize
                     val hasSimilarFontSize = fontSizeRatio > 0.85f && fontSizeRatio < 1.15f
-                    if (hasSimilarFontSize && verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
+                    val hasSameStyle = lineBlock.fontInfo.isBold == lastInGroup.fontInfo.isBold && lineBlock.fontInfo.isItalic == lastInGroup.fontInfo.isItalic
+                    if (hasSimilarFontSize && hasSameStyle && verticalGap > -lastInGroup.fontInfo.fontSize && verticalGap < lastInGroup.fontInfo.fontSize * 1.5f) {
                         val overlapX = maxOf(0f, minOf(lineBlock.boundingBox.right, lastInGroup.boundingBox.right) - maxOf(lineBlock.boundingBox.left, lastInGroup.boundingBox.left))
                         val minWidth = minOf(lineBlock.boundingBox.width, lastInGroup.boundingBox.width)
                         val leftDiff = java.lang.Math.abs(lineBlock.boundingBox.left - lastInGroup.boundingBox.left)
@@ -236,28 +236,29 @@ class PdfRepositoryImpl @Inject constructor(
     // visual line (see mergeTextBlocks) written at its own original anchor, so an edit here can
     // only ever rewrite that line's own text-showing operator(s) — every other line and every
     // other block keeps its original position untouched.
-    override suspend fun applyTextEdit(blockId: String, newText: String, pageIndex: Int): Result<Unit> {
+    override suspend fun applyTextEdit(anchor: com.genx.ai.photo.editpdf.domain.model.PdfAnchor, newText: String, pageIndex: Int): Result<Unit> {
         return try {
-            val block = textBlockCache[blockId] ?: return Result.failure(
-                IllegalArgumentException("TextBlock with ID $blockId not found in cache")
-            )
-
             // Always write at the block's original anchor — never a position re-derived from
             // the document's current (possibly already-edited) state. No whiteout/overlay: the
             // engine mutates the original text-showing operator's own operand directly, which is
             // what makes the old glyphs stop being drawn.
-            val success = pdfEngine.replaceText(pageIndex, newText, block.anchor)
+            val success = pdfEngine.replaceText(pageIndex, newText, anchor)
             if (success) {
+                // Find all blocks in the cache that match this anchor and update them
+                val affectedBlocks = textBlockCache.values.filter { it.anchor == anchor }
+                
                 val editOp = EditOperation.TextEdit(
-                    blockId = blockId,
-                    originalText = block.text,
+                    blockId = affectedBlocks.firstOrNull()?.id ?: "unknown",
+                    originalText = affectedBlocks.firstOrNull()?.text ?: "",
                     newText = newText,
                     pageIndex = pageIndex
                 )
                 undoStack.addLast(editOp)
                 redoStack.clear() // Clear redo stack on new edit
 
-                textBlockCache[blockId] = block.copy(text = newText)
+                affectedBlocks.forEach { block ->
+                    textBlockCache[block.id] = block.copy(text = newText)
+                }
 
                 Result.success(Unit)
             } else {

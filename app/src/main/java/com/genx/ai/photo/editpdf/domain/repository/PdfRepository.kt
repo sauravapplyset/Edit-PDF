@@ -13,7 +13,7 @@ interface PdfRepository {
     suspend fun getPageCount(): Int
     suspend fun renderPage(pageIndex: Int, scale: Float = 2.0f): Result<Bitmap>
     suspend fun extractTextBlocks(pageIndex: Int): Result<List<TextBlock>>
-    suspend fun applyTextEdit(blockId: String, newText: String, pageIndex: Int): Result<Unit>
+    suspend fun applyTextEdit(anchor: com.genx.ai.photo.editpdf.domain.model.PdfAnchor, newText: String, pageIndex: Int): Result<Unit>
     suspend fun exportDocument(outputUriString: String): Result<Unit>
     fun closeDocument()
     
